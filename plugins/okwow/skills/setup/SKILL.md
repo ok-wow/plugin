@@ -133,12 +133,11 @@ recurring tasks; if yours does not, say so and skip this step.
 The check runs unattended and completes the tasks it finishes, with a
 completion report. Nothing waits for review: the user reads the reports in
 okWOW and reopens a task whose work is wrong. Agree with the user on how often
-it runs (suggest once each weekday morning), which spaces it covers (default:
-all of theirs) and how many tasks one run may take (default 3). Show them the
-prompt below with those filled in, get one yes, then create the recurring task
-with your app's own scheduler. The run must be allowed to call the okWOW tools
-without asking each time; if your app needs a setting for that, tell the user
-which one.
+it runs, which spaces it covers (default: all of theirs) and how many tasks
+one run may take (default 3). Show them the prompt below with those filled in,
+get one yes, then create the recurring task with your app's own scheduler. The
+run must be allowed to call the okWOW tools without asking each time; if your
+app needs a setting for that, tell the user which one.
 
 > Work through my okWOW tasks that an agent can finish on its own. First read
 > the okWOW save skill's `references/tasks.md` and follow it, passing this
