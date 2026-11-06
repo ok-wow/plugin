@@ -1,0 +1,14 @@
+{
+  "description": "okWOW session capture: saves your agent sessions as okWOW chats. The first session opens okWOW once to sign in; nothing is sent before that.",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "[ -f \"$HOME/.config/okwow/capture-token.json\" ] || [ ! -e \"$HOME/.config/okwow/capture-asked\" ] || exit 0; exec python3 -I \"${CLAUDE_PLUGIN_ROOT}/scripts/okwow-capture\" hook", "timeout": 10 }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "[ -f \"$HOME/.config/okwow/capture-token.json\" ] || [ ! -e \"$HOME/.config/okwow/capture-asked\" ] || exit 0; exec python3 -I \"${CLAUDE_PLUGIN_ROOT}/scripts/okwow-capture\" hook", "timeout": 10 }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "[ -f \"$HOME/.config/okwow/capture-token.json\" ] || [ ! -e \"$HOME/.config/okwow/capture-asked\" ] || exit 0; exec python3 -I \"${CLAUDE_PLUGIN_ROOT}/scripts/okwow-capture\" hook", "timeout": 10 }] }
+    ]
+  }
+}

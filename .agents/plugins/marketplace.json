@@ -1,0 +1,12 @@
+{
+  "name": "okwow",
+  "interface": { "displayName": "okWOW" },
+  "plugins": [
+    {
+      "name": "okwow",
+      "source": { "source": "local", "path": "./plugins/okwow" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}

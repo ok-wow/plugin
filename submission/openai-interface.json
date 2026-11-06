@@ -1,0 +1,18 @@
+{
+  "displayName": "okWOW",
+  "shortDescription": "Your team knowledge, connected",
+  "longDescription": "Bring your team’s knowledge into your conversations. Find past decisions, recall project context with source links, and save memories and documents in okWOW when you ask. Connect your okWOW account and choose the access you grant. Available knowledge and actions depend on your account permissions. This package provides recall and save skills with the hosted MCP connection; it does not capture sessions.",
+  "category": "Productivity",
+  "defaultPrompt": [
+    "Find our past decisions about this project and cite the sources.",
+    "Show me which okWOW spaces I can use.",
+    "Save this decision in the okWOW space I choose."
+  ],
+  "websiteURL": "https://okwow.ai/docs/okwow-mcp/",
+  "supportURL": "https://okwow.ai/docs/support/",
+  "privacyPolicyURL": "https://okwow.ai/legal/privacy-policy/",
+  "termsOfServiceURL": "https://okwow.ai/legal/terms-of-use/",
+  "logo": "./assets/icon.png",
+  "composerIcon": "./assets/icon.png",
+  "developerName": "OKWOW, INC."
+}

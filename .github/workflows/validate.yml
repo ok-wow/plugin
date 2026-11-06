@@ -1,0 +1,20 @@
+name: Validate packages
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python3 tests/check_release.py
+      - run: python3 tests/check_redaction.py
+      - run: python3 tests/check_capture.py
+      - run: git diff --check

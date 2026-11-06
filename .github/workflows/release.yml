@@ -1,0 +1,57 @@
+name: Prepare draft release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'New immutable version tag matching both manifests (example v0.1.46)'
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+jobs:
+  draft:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check packages
+        run: |
+          python3 tests/check_release.py
+          python3 tests/check_redaction.py
+          python3 scripts/package_release.py --tag "$RELEASE_TAG" --output dist
+      - name: Retain OpenAI submission package separately
+        uses: actions/upload-artifact@v4
+        with:
+          name: openai-submission-${{ inputs.tag }}
+          path: |
+            dist/okwow-openai-*.zip
+            dist/SHA256SUMS
+          retention-days: 90
+          if-no-files-found: error
+      - name: Create draft release without moving existing tags
+        shell: bash
+        run: |
+          if git rev-parse --verify "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo 'Tag already exists. Never replace a released tag.' >&2
+            exit 1
+          fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo 'Release already exists. Inspect that draft rather than replacing it.' >&2
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/tags/$RELEASE_TAG" -f sha="$GITHUB_SHA" >/dev/null
+          gh release create "$RELEASE_TAG" dist/okwow-gemini-*.zip \
+            --verify-tag --draft --title "okWOW $RELEASE_TAG" \
+            --notes-file submission/release-notes.md

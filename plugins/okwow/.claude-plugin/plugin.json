@@ -1,0 +1,22 @@
+{
+  "name": "okwow",
+  "version": "0.1.48",
+  "description": "Search and save your okWOW knowledge from your coding agent, as you, and send your sessions to okWOW.",
+  "author": {
+    "name": "okWOW",
+    "url": "https://okwow.ai"
+  },
+  "homepage": "https://okwow.ai",
+  "repository": "https://github.com/ok-wow/plugin",
+  "license": "MIT",
+  "keywords": [
+    "okwow",
+    "memory",
+    "knowledge",
+    "mcp",
+    "transcripts",
+    "sessions",
+    "coding agents"
+  ],
+  "privacyPolicyUrl": "https://okwow.ai/legal/privacy-policy/"
+}

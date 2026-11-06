@@ -1,0 +1,13 @@
+{
+  "name": "okwow",
+  "owner": { "name": "okWOW", "email": "support@okwow.ai" },
+  "description": "okWOW plugins for coding agents.",
+  "plugins": [
+    {
+      "name": "okwow",
+      "source": "./plugins/okwow",
+      "description": "Search and save your okWOW knowledge from your coding agent, as you, and send your sessions to okWOW.",
+      "category": "productivity"
+    }
+  ]
+}

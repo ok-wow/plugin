@@ -1,0 +1,10 @@
+{
+  "name": "okwow",
+  "version": "0.1.48",
+  "description": "Find team knowledge and save memories and documents in okWOW.",
+  "mcpServers": {
+    "okwow": {
+      "httpUrl": "https://api.okwow.ai/mcp"
+    }
+  }
+}

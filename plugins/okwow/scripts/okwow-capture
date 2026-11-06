@@ -1,0 +1,1273 @@
+#!/usr/bin/env python3
+"""okwow-capture: send coding agent sessions to okWOW as chats.
+
+The first session after the plugin is installed opens okWOW once to sign in.
+From then on every session is uploaded through the okWOW MCP server once it
+ends or has been idle for a while, unless the user's rules in okWOW (Settings →
+Authorized apps) skip sessions started where it started, or pause capture.
+The app running the session is detected, not configured: see APPS. okWOW keeps
+each session as one of the user's chats in
+its model-neutral format and processes it as it does a chat in the app: a
+title, a summary and the memories it learns. Secrets are redacted on this
+machine before anything leaves it.
+
+Standard library only, so the hooks run on the system Python.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import contextlib
+import fcntl
+import hashlib
+import http.server
+import json
+import os
+import re
+import secrets
+import shutil
+import socket
+import stat
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import webbrowser
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Iterator, Mapping, Optional
+
+PRODUCTION_SERVER = "https://api.okwow.ai/mcp"
+# One sign-in for the plugin: its MCP tools and session capture.
+CLIENT_NAME = "okWOW plugin"
+PROTOCOL_VERSION = "2025-06-18"
+DEFAULT_IDLE_MINUTES = 30
+# A sweep for one ended session waits this long for a running sweep. It runs
+# detached, so the hook's own timeout does not bound it; an upload can take this long.
+SWEEP_WAIT_SECONDS = 60
+# A watcher outlives a session no longer than this; SessionStart sweeps the rest.
+WATCH_HOURS = 24
+FORGET_DAYS = 30
+STRING_CHARS = 50_000
+# okWOW's limits on a session's start.
+FOLDER_MAX = 1024
+REPOSITORY_MAX = 512
+MAX_UPLOAD_BYTES = 40 * 1024 * 1024
+# A session file larger than this is not read at all.
+MAX_SESSION_BYTES = 512 * 1024 * 1024
+LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+CONFIG_DIR = Path(os.environ.get("OKWOW_CAPTURE_HOME") or Path.home() / ".config" / "okwow")
+STATE_DIR = Path(os.environ.get("OKWOW_CAPTURE_STATE") or Path.home() / ".local" / "state" / "okwow")
+CONFIG_FILE = CONFIG_DIR / "capture.json"
+# Holds the connection; with the Keychain, its tokens live there instead.
+TOKEN_FILE = CONFIG_DIR / "capture-token.json"
+# Sign-in opens on its own once; this records that it did.
+ASKED_FILE = CONFIG_DIR / "capture-asked"
+STATE_FILE = STATE_DIR / "capture-state.json"
+LOCK_FILE = STATE_DIR / "capture.lock"
+SWEEP_LOCK_FILE = STATE_DIR / "capture-sweep.lock"
+LOG_FILE = STATE_DIR / "capture.log"
+KEYCHAIN_SERVICE = CLIENT_NAME
+SECRET_FIELDS = ("access_token", "refresh_token", "expires_at")
+
+
+class CaptureError(Exception):
+    pass
+
+
+# --- files -------------------------------------------------------------------
+
+
+def private_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+
+def check_owned(path: Path, private: bool = False) -> None:
+    """Refuse a file another user could have written, or, for a private one, read."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return
+    loose = info.st_mode & (0o077 if private else 0o022)
+    if stat.S_ISLNK(info.st_mode) or info.st_uid != os.getuid() or loose:
+        raise CaptureError(
+            f"{path} is not safe to trust (a link, owned by someone else, or open to other users); "
+            f"fix it with `chmod {'600' if private else '644'} {path}` or delete it"
+        )
+
+
+def read_json(path: Path, default: Any, private: bool = False) -> Any:
+    check_owned(path, private)
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def write_json(path: Path, data: Any, private: bool = False) -> None:
+    private_dir(path.parent)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with contextlib.suppress(FileNotFoundError):
+        tmp.unlink()
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600 if private else 0o644)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)
+
+
+def log_handle() -> int:
+    private_dir(STATE_DIR)
+    return os.open(LOG_FILE, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+
+
+def log(message: str) -> None:
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with os.fdopen(log_handle(), "a") as f:
+        f.write(f"{stamp} {message}\n")
+
+
+@contextlib.contextmanager
+def locked(blocking: bool = True, path: Path = LOCK_FILE, wait: float = 0) -> Iterator[bool]:
+    """Hold path's lock. Not blocking, it gives up at once, or after `wait` seconds."""
+    private_dir(STATE_DIR)
+    with open(path, "w") as f:
+        deadline = time.time() + wait
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+                break
+            except BlockingIOError:
+                if time.time() >= deadline:
+                    yield False
+                    return
+                time.sleep(0.1)
+        try:
+            yield True
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def config() -> dict[str, Any]:
+    return read_json(CONFIG_FILE, {})
+
+
+def plugin_server() -> str:
+    """The okWOW server the plugin's own MCP connection uses: its .mcp.json URL,
+    with ${VAR:-default} expanded the way the app expands it (OKWOW_MCP_URL)."""
+    mcp = Path(os.path.abspath(__file__)).parent.parent / ".mcp.json"
+    try:
+        url = json.loads(mcp.read_text())["mcpServers"]["okwow"]["url"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return PRODUCTION_SERVER
+    return re.sub(r"\$\{(\w+)(?::-([^}]*))?\}", lambda m: os.environ.get(m[1]) or m[2] or "", url)
+
+
+def server() -> str:
+    return checked_server(config().get("server") or plugin_server())
+
+
+# --- http --------------------------------------------------------------------
+
+
+def checked_server(url: str) -> str:
+    """Capture talks to okWOW only: https on okwow.ai, or this machine for development."""
+    parts = urllib.parse.urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if parts.scheme == "https" and (host == "okwow.ai" or host.endswith(".okwow.ai")):
+        return url
+    if parts.scheme in ("http", "https") and host in LOOPBACK:
+        return url
+    raise CaptureError(f"{parts.scheme}://{host} is not an okWOW server; capture only sends to okwow.ai")
+
+
+def checked_endpoint(url: str) -> str:
+    """An endpoint okWOW handed out: https, or this machine when okWOW itself is local."""
+    parts = urllib.parse.urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if parts.scheme == "https" and host:
+        return url
+    if parts.scheme == "http" and host in LOOPBACK and urllib.parse.urlsplit(server()).hostname in LOOPBACK:
+        return url
+    # The path and query are left out: an upload URL carries its signature there.
+    raise CaptureError(f"Refusing to send to {parts.scheme}://{host}: not https")
+
+
+def fetch(
+    method: str,
+    url: str,
+    body: Optional[bytes] = None,
+    headers: Optional[dict[str, str]] = None,
+    timeout: float = 60,
+) -> tuple[int, dict[str, str], bytes]:
+    request = urllib.request.Request(checked_endpoint(url), data=body, method=method, headers=headers or {})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, {k.lower(): v for k, v in response.headers.items()}, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, {k.lower(): v for k, v in error.headers.items()}, error.read()
+
+
+def get_json(url: str) -> dict[str, Any]:
+    status, _, body = fetch("GET", url, headers={"Accept": "application/json"})
+    if status != 200:
+        raise CaptureError(f"GET {url} returned {status}")
+    return json.loads(body)
+
+
+def post_form(url: str, fields: dict[str, str]) -> dict[str, Any]:
+    status, _, body = fetch(
+        "POST",
+        url,
+        urllib.parse.urlencode(fields).encode(),
+        {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+    )
+    data = json.loads(body or b"{}")
+    if status != 200:
+        raise CaptureError(f"Sign-in refused: {data.get('error_description') or data.get('error') or status}")
+    return data
+
+
+# --- tokens ------------------------------------------------------------------
+
+
+def use_keychain() -> bool:
+    return sys.platform == "darwin" and os.environ.get("OKWOW_CAPTURE_KEYCHAIN") != "0" and bool(shutil.which("security"))
+
+
+def security(*args: str, stdin: Optional[str] = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["security", *args], input=stdin, text=True, capture_output=True, timeout=15, check=False)
+
+
+def keychain_write(account: str, secret: dict[str, Any]) -> None:
+    blob = base64.b64encode(json.dumps(secret).encode()).decode()
+    # Through stdin, so the tokens never appear in a process listing.
+    command = f'add-generic-password -U -s "{KEYCHAIN_SERVICE}" -a "{account}" -w "{blob}"\n'
+    security("-i", stdin=command)
+    if keychain_read(account) != secret:
+        raise CaptureError("Could not save the okWOW sign-in to the Keychain")
+
+
+def keychain_read(account: str) -> dict[str, Any]:
+    found = security("find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w")
+    if found.returncode != 0:
+        return {}
+    try:
+        return json.loads(base64.b64decode(found.stdout.strip()))
+    except ValueError:
+        return {}
+
+
+def connection() -> dict[str, Any]:
+    """The saved connection with its tokens, wherever they are kept."""
+    saved = read_json(TOKEN_FILE, {}, private=True)
+    if saved.get("store") == "keychain":
+        saved.update(keychain_read(saved.get("server", "")))
+    return saved
+
+
+def store_tokens(saved: dict[str, Any], tokens: dict[str, Any]) -> None:
+    secret = {
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens.get("refresh_token") or saved.get("refresh_token"),
+        "expires_at": time.time() + float(tokens.get("expires_in") or 300) - 30,
+    }
+    meta = {k: v for k, v in saved.items() if k not in SECRET_FIELDS}
+    if use_keychain():
+        keychain_write(meta["server"], secret)
+        meta["store"] = "keychain"
+        write_json(TOKEN_FILE, meta, private=True)
+    else:
+        meta["store"] = "file"
+        write_json(TOKEN_FILE, {**meta, **secret}, private=True)
+    saved.update(secret)
+
+
+def access_token(force_refresh: bool = False) -> str:
+    saved = connection()
+    if not saved.get("access_token"):
+        raise CaptureError("Not signed in; run `okwow-capture login`")
+    if saved.get("server") != server():
+        raise CaptureError("The okWOW sign-in is for another server; run `okwow-capture login`")
+    if force_refresh or time.time() >= saved.get("expires_at", 0):
+        if not saved.get("refresh_token"):
+            raise CaptureError("The okWOW sign-in expired; run `okwow-capture login`")
+        store_tokens(
+            saved,
+            post_form(
+                saved["token_endpoint"],
+                {
+                    "grant_type": "refresh_token",
+                    "refresh_token": saved["refresh_token"],
+                    "client_id": saved["client_id"],
+                    "resource": saved["resource"],
+                },
+            ),
+        )
+    return saved["access_token"]
+
+
+# --- oauth -------------------------------------------------------------------
+
+
+def discover(url: str) -> dict[str, Any]:
+    parts = urllib.parse.urlsplit(url)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    resource = get_json(f"{origin}/.well-known/oauth-protected-resource{parts.path}")
+    issuer = resource["authorization_servers"][0].rstrip("/")
+    return {
+        "resource": resource.get("resource", url),
+        "metadata": get_json(f"{issuer}/.well-known/oauth-authorization-server"),
+    }
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+PAGE = """<!doctype html><meta charset="utf-8"><title>okWOW</title>
+<body style="font:16px system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem">
+<h1 style="font-size:1.4rem">{heading}</h1><p>{body}</p>"""
+
+
+def login(url: str) -> dict[str, Any]:
+    """Sign in through the browser, for the MCP tools and capture; returns the capture settings."""
+    url = checked_server(url)
+    found = discover(url)
+    metadata = found["metadata"]
+    saved = read_json(TOKEN_FILE, {}, private=True)
+    if saved.get("server") == url and saved.get("client_id") and saved.get("port"):
+        client_id, port = saved["client_id"], saved["port"]
+    else:
+        port = free_port()
+        status, _, body = fetch(
+            "POST",
+            metadata["registration_endpoint"],
+            json.dumps(
+                {
+                    "client_name": CLIENT_NAME,
+                    "redirect_uris": [f"http://127.0.0.1:{port}/callback"],
+                    "grant_types": ["authorization_code", "refresh_token"],
+                    "response_types": ["code"],
+                    "token_endpoint_auth_method": "none",
+                }
+            ).encode(),
+            {"Content-Type": "application/json", "Accept": "application/json"},
+        )
+        if status not in (200, 201):
+            raise CaptureError(f"Client registration failed ({status})")
+        client_id = json.loads(body)["client_id"]
+    redirect_uri = f"http://127.0.0.1:{port}/callback"
+    verifier = secrets.token_urlsafe(64)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    state = secrets.token_urlsafe(24)
+    authorize = checked_endpoint(metadata["authorization_endpoint"]) + "?" + urllib.parse.urlencode(
+        {
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": state,
+            "scope": "openid profile email offline_access",
+            "resource": found["resource"],
+        }
+    )
+    outcome: dict[str, Any] = {}
+
+    def finish(code: str) -> dict[str, Any]:
+        tokens = post_form(
+            metadata["token_endpoint"],
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": client_id,
+                "redirect_uri": redirect_uri,
+                "code_verifier": verifier,
+                "resource": found["resource"],
+            },
+        )
+        connection_ = {
+            "server": url,
+            "resource": found["resource"],
+            "token_endpoint": metadata["token_endpoint"],
+            "client_id": client_id,
+            "port": port,
+        }
+        store_tokens(connection_, tokens)
+        mcp = MCP(url)
+        profile = mcp.call("get_profile", {})
+        user = profile.get("user") or profile
+        meta = read_json(TOKEN_FILE, {}, private=True)
+        meta["profile"] = {"name": user.get("name") or user.get("display_name"), "email": user.get("email")}
+        write_json(TOKEN_FILE, meta, private=True)
+        return {"email": meta["profile"]["email"], "settings": mcp.call("get_session_capture", {})}
+
+    class Callback(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            parts = urllib.parse.urlsplit(self.path)
+            query = dict(urllib.parse.parse_qsl(parts.query))
+            if parts.path != "/callback" or query.get("state") != state:
+                # Only the redirect this sign-in asked for may finish it.
+                self.send_response(404)
+                self.end_headers()
+                return
+            if "code" not in query:
+                outcome["error"] = query.get("error_description") or query.get("error") or "no code"
+                heading, body = "Not signed in", "okWOW was not connected. You can close this tab."
+            else:
+                try:
+                    outcome.update(finish(query["code"]))
+                    heading, body = "You're connected to okWOW", describe(outcome["settings"], html=True)
+                except Exception as error:  # noqa: BLE001 — shown on the page, not lost in a reset
+                    outcome["error"] = str(error) if isinstance(error, CaptureError) else f"{type(error).__name__}: {error}"
+                    heading, body = "Sign-in did not finish", html_escape(str(error))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(PAGE.format(heading=heading, body=body).encode())
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    listener = http.server.HTTPServer(("127.0.0.1", port), Callback)
+    listener.timeout = 5
+    print(f"Opening okWOW to sign in. If the browser does not open, visit:\n{authorize}\n", flush=True)
+    # Some browser commands wait until the page is done, which needs this listener.
+    threading.Thread(target=webbrowser.open, args=(authorize,), daemon=True).start()
+    deadline = time.time() + 300
+    try:
+        while not outcome and time.time() < deadline:
+            listener.handle_request()
+    finally:
+        listener.server_close()
+    if "settings" not in outcome:
+        raise CaptureError(f"Sign-in did not complete: {outcome.get('error') or 'timed out'}")
+    return outcome
+
+
+def html_escape(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def describe(settings: dict[str, Any], html: bool = False) -> str:
+    """What capture does now, in the user's words."""
+    where = (settings.get("in") or {}).get("label") or "your default space"
+    link = settings.get("settings_url") or ""
+    if settings.get("action") != "send":
+        text = ("Session capture is paused in okWOW, or skips sessions unless a rule for the folder "
+                "or repository they start in sends them.")
+    else:
+        text = (f"Your agent sessions are saved as your own chats in {where}, unless a rule in okWOW for "
+                "the folder or repository they start in sends them elsewhere or skips them. "
+                "okWOW summarizes them and learns from them, like a chat in the app.")
+    if link and html:
+        safe = html_escape(link).replace('"', "&quot;")
+        return f'{html_escape(text)} <a href="{safe}">Change this in okWOW</a>.'
+    return f"{text} Change this at {link}" if link else text
+
+
+# --- mcp ---------------------------------------------------------------------
+
+
+class MCP:
+    """A minimal Streamable HTTP MCP client for tool calls."""
+
+    def __init__(self, url: str) -> None:
+        self.server = checked_server(url)
+        self.session: Optional[str] = None
+        self.next_id = 0
+        self._send("initialize", {
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "okwow-capture", "version": "0.1.48"},
+        })
+        self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+    def _post(self, message: dict[str, Any], retry: bool = True) -> tuple[dict[str, str], bytes]:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "Authorization": f"Bearer {access_token()}",
+            "MCP-Protocol-Version": PROTOCOL_VERSION,
+        }
+        if self.session:
+            headers["Mcp-Session-Id"] = self.session
+        status, response_headers, body = fetch("POST", self.server, json.dumps(message).encode(), headers)
+        if status == 401 and retry:
+            access_token(force_refresh=True)
+            return self._post(message, retry=False)
+        if status >= 400:
+            raise CaptureError(f"okWOW MCP returned {status}: {body[:300]!r}")
+        if response_headers.get("mcp-session-id"):
+            self.session = response_headers["mcp-session-id"]
+        return response_headers, body
+
+    def _send(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        self.next_id += 1
+        request_id = self.next_id
+        headers, body = self._post({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+        messages: list[dict[str, Any]] = []
+        if "text/event-stream" in headers.get("content-type", ""):
+            for line in body.decode("utf-8", "replace").splitlines():
+                if line.startswith("data:") and line[5:].strip():
+                    messages.append(json.loads(line[5:]))
+        elif body:
+            parsed = json.loads(body)
+            messages.extend(parsed if isinstance(parsed, list) else [parsed])
+        for message in messages:
+            if message.get("id") == request_id:
+                if "error" in message:
+                    raise CaptureError(message["error"].get("message", str(message["error"])))
+                return message["result"]
+        raise CaptureError(f"No reply to {method}")
+
+    def call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        result = self._send("tools/call", {"name": tool, "arguments": arguments})
+        text = "".join(c.get("text", "") for c in result.get("content", []) if c.get("type") == "text")
+        if result.get("isError"):
+            raise CaptureError(f"{tool}: {text[:500]}")
+        if isinstance(result.get("structuredContent"), dict):
+            return result["structuredContent"]
+        try:
+            return json.loads(text)
+        except ValueError:
+            return {"text": text}
+
+
+# --- redaction ---------------------------------------------------------------
+
+_SECRET_NAME = r"[A-Za-z0-9_.-]*(?:secret|token|passw(?:or)?d|passwd|api[_-]?key|private[_-]?key|access[_-]?key|credential|auth[_-]?key|client[_-]?secret|dsn|webhook)[A-Za-z0-9_.-]*"
+REDACTIONS: list[tuple[re.Pattern[str], Any]] = [
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S), "[REDACTED PRIVATE KEY]"),
+    (re.compile(r"\bAGE-SECRET-KEY-1[0-9A-Z]{58}\b"), "[REDACTED PRIVATE KEY]"),
+    (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "[REDACTED AWS KEY]"),
+    (re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}"), "[REDACTED ANTHROPIC KEY]"),
+    (re.compile(r"\bsk-(?:proj-|svcacct-|or-)?[A-Za-z0-9_-]{20,}"), "[REDACTED API KEY]"),
+    (re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b"), "[REDACTED GITHUB TOKEN]"),
+    (re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"), "[REDACTED SLACK TOKEN]"),
+    (re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}"), "[REDACTED GITLAB TOKEN]"),
+    (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b|\bya29\.[0-9A-Za-z_-]{20,}|\bGOCSPX-[A-Za-z0-9_-]{20,}"), "[REDACTED GOOGLE KEY]"),
+    (re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b|\bwhsec_[A-Za-z0-9]{16,}\b"), "[REDACTED STRIPE KEY]"),
+    (re.compile(r"\bnpm_[A-Za-z0-9]{36}\b"), "[REDACTED NPM TOKEN]"),
+    (re.compile(r"\bhf_[A-Za-z0-9]{30,}\b"), "[REDACTED HUGGING FACE TOKEN]"),
+    (re.compile(r"\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}"), "[REDACTED SENDGRID KEY]"),
+    (re.compile(r"\bSK[0-9a-fA-F]{32}\b"), "[REDACTED TWILIO KEY]"),
+    (re.compile(r"\bdo[opr]_v1_[a-f0-9]{64}\b"), "[REDACTED DIGITALOCEAN TOKEN]"),
+    (re.compile(r"\blin_(?:api|oauth)_[A-Za-z0-9]{32,}\b"), "[REDACTED LINEAR KEY]"),
+    (re.compile(r"\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}\b"), "[REDACTED SHOPIFY TOKEN]"),
+    (re.compile(r"\bdapi[a-f0-9]{32}\b"), "[REDACTED DATABRICKS TOKEN]"),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), "[REDACTED JWT]"),
+    (re.compile(r"(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=-]{16,}"), lambda m: f"{m.group(1)} [REDACTED]"),
+    (re.compile(r"([a-z][a-z0-9+.-]*://)[^\s:/@]+:[^\s@/]+@"), r"\1[REDACTED]@"),
+    # Connection strings (Azure, ADO.NET, ODBC) and request headers.
+    (re.compile(r"(?i)\b(AccountKey|SharedAccessKey|SharedAccessSignature|Pwd|Password)=([^;\s\"']+)"), r"\1=[REDACTED]"),
+    (re.compile(r"(?im)\b(authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)(\s*:\s*)([^\r\n\"']{6,})"),
+     lambda m: f"{m.group(1)}{m.group(2)}[REDACTED]"),
+    # Command-line flags: --api-key VALUE, --password=VALUE.
+    (re.compile(r"(?i)(--(?:[a-z0-9]+-)*(?:password|passwd|token|secret|api-?key|access-?key|auth)(?:[=\s]+))(['\"]?)([^\s'\"]{4,})"),
+     lambda m: f"{m.group(1)}{m.group(2)}[REDACTED]"),
+    (
+        re.compile(rf"(?im)\b({_SECRET_NAME})(\s*[=:]\s*|\"\s*:\s*\")(['\"]?)([^\s'\",;]{{6,}})"),
+        lambda m: f"{m.group(1)}{m.group(2)}{m.group(3)}[REDACTED]",
+    ),
+]
+# A tool call that reads one of these files has its output left out entirely.
+SENSITIVE_PATH = re.compile(
+    r"(?:^|[\s/'\"=~])(?:\.env(?:\.[\w.-]+)?|\.envrc|\.netrc|\.npmrc|\.pypirc|\.pgpass|\.git-credentials|\.?credentials(?:\.json)?"
+    r"|id_[rd]sa|id_ecdsa|id_ed25519|[\w.-]+\.pem|[\w.-]+\.p12|[\w.-]+\.pfx|[\w.-]+\.key|[\w.-]+\.keychain(?:-db)?"
+    r"|secrets?\.(?:json|ya?ml|toml)|[\w.-]*\.tfstate(?:\.backup)?|[\w.-]*\.tfvars|service[-_]account[\w.-]*\.json"
+    r"|capture-token\.json|\.ssh/[\w.-]+|\.aws/[\w.-]+|\.kube/config|\.docker/config\.json|gh/hosts\.yml)(?:$|[\s'\"])"
+)
+# A command that prints credentials has its output left out entirely.
+SENSITIVE_COMMAND = re.compile(
+    r"(?:^|[\s;&|(`\"'])(?:printenv|env|export\s+-p|set|declare\s+-[px]"
+    r"|gh\s+auth\s+(?:token|status\s+--show-token)"
+    r"|gcloud\s+auth\s+(?:application-default\s+)?print-(?:access|identity)-token"
+    r"|aws\s+(?:configure\s+(?:export-credentials|get)|sts\s+get-session-token|ecr\s+get-login-password)"
+    r"|az\s+account\s+get-access-token|security\s+find-(?:generic|internet)-password"
+    r"|op\s+(?:read|item\s+get)|vault\s+(?:read|kv\s+get)|kubectl\s+get\s+secrets?|doppler\s+secrets"
+    r"|heroku\s+config|vercel\s+env\s+pull|npm\s+token|docker\s+login)(?=$|[\s;&|)`\"'\\])"
+)
+
+
+def redact(text: str) -> str:
+    for pattern, replacement in REDACTIONS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def touches_secrets(text: str) -> bool:
+    return bool(SENSITIVE_PATH.search(text) or SENSITIVE_COMMAND.search(text))
+
+
+# --- sessions ----------------------------------------------------------------
+
+# okWOW turns an app's own session file into its neutral chat format, so the
+# file is sent as the app wrote it, minus what okWOW never reads and with
+# secrets taken out.
+KEEP_CLAUDE_LINES = {"user", "assistant", "custom-title"}
+KEEP_CLAUDE_FIELDS = {
+    "type", "uuid", "parentUuid", "isSidechain", "isMeta", "isCompactSummary", "sessionId", "cwd", "timestamp", "message", "customTitle",
+}
+KEEP_CODEX_META = {"id", "session_id", "cwd", "timestamp", "originator", "cli_version"}
+SECRETS_OMITTED = "[output that may hold secrets omitted]"
+_TAG_BLOCK = re.compile(r"<(system-reminder|task-notification)>.*?</\1>", re.S)
+
+
+def session_file(app: "App", path: Path) -> Path:
+    """The app's own session file, never anything else on the machine."""
+    if not app.owns_file(path):
+        raise CaptureError(f"{path} is not one of the app's session files")
+    real = Path(os.path.realpath(path))
+    info = real.stat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+        raise CaptureError(f"{path} is not one of the app's session files")
+    if info.st_size > MAX_SESSION_BYTES:
+        raise CaptureError(f"{path} is {info.st_size} bytes; capture reads at most {MAX_SESSION_BYTES}")
+    return real
+
+
+def clip(text: str, limit: int = STRING_CHARS) -> str:
+    return text if len(text) <= limit else text[:limit] + " … [truncated]"
+
+
+def scrub(value: Any) -> Any:
+    """Every string redacted and bounded, at any depth."""
+    if isinstance(value, str):
+        return clip(redact(value))
+    if isinstance(value, list):
+        return [scrub(v) for v in value]
+    if isinstance(value, dict):
+        return {k: scrub(v) for k, v in value.items()}
+    return value
+
+
+class Session:
+    """An app's session file, trimmed and redacted for upload."""
+
+    def __init__(self, app: "App", path: Path) -> None:
+        self.agent = app.agent
+        self.id = ""
+        self.title = ""
+        self.first_prompt = ""
+        self.started = ""
+        self.lines: list[str] = []
+        self._secret_calls: set[str] = set()
+        for raw in path.open(encoding="utf-8", errors="replace"):
+            try:
+                entry = json.loads(raw)
+            except ValueError:
+                continue
+            kept = app.parse(self, entry)
+            if kept is not None:
+                self.started = self.started or kept.get("timestamp", "")
+                self.lines.append(json.dumps(scrub(kept), ensure_ascii=False))
+
+    def payload(self) -> bytes:
+        return ("\n".join(self.lines) + "\n").encode()
+
+    def _prompt(self, text: str) -> None:
+        text = _TAG_BLOCK.sub("", text).strip()
+        if text and not self.first_prompt and not text.startswith("<"):
+            self.first_prompt = text
+
+    def _claude(self, entry: dict[str, Any]) -> Optional[dict[str, Any]]:
+        kind = entry.get("type")
+        if kind not in KEEP_CLAUDE_LINES:
+            return None
+        if kind == "custom-title":
+            self.title = entry.get("customTitle") or self.title
+            return {k: v for k, v in entry.items() if k in KEEP_CLAUDE_FIELDS}
+        if entry.get("isSidechain"):
+            return None
+        self.id = self.id or entry.get("sessionId", "")
+        message = entry.get("message") or {}
+        content = message.get("content")
+        typed = kind == "user" and not entry.get("isMeta") and not entry.get("isCompactSummary")
+        if isinstance(content, str):
+            if typed:
+                self._prompt(content)
+        elif isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "text" and typed:
+                    self._prompt(block.get("text", ""))
+                elif block.get("type") == "tool_use" and touches_secrets(tool_input_text(block.get("input"))):
+                    self._secret_calls.add(block.get("id", ""))
+                elif block.get("type") == "tool_result" and block.get("tool_use_id") in self._secret_calls:
+                    block["content"] = SECRETS_OMITTED
+        return {k: v for k, v in entry.items() if k in KEEP_CLAUDE_FIELDS}
+
+    def _codex(self, entry: dict[str, Any]) -> Optional[dict[str, Any]]:
+        payload = entry.get("payload") or {}
+        if entry.get("type") == "session_meta":
+            self.id = payload.get("id") or payload.get("session_id") or self.id
+            return {**entry, "payload": {k: v for k, v in payload.items() if k in KEEP_CODEX_META}}
+        if entry.get("type") != "response_item":
+            return None
+        item = payload.get("type")
+        if item == "message" and payload.get("role") == "user":
+            for block in payload.get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "input_text":
+                    text = block.get("text", "")
+                    if not text.startswith(("# AGENTS.md", "<")):
+                        self._prompt(text)
+        elif item in ("function_call", "custom_tool_call"):
+            arguments = payload.get("arguments") or payload.get("input") or ""
+            with contextlib.suppress(ValueError, TypeError):
+                arguments = json.loads(arguments)
+            if touches_secrets(tool_input_text(arguments)):
+                self._secret_calls.add(payload.get("call_id", ""))
+        elif item in ("function_call_output", "custom_tool_call_output"):
+            if payload.get("call_id") in self._secret_calls:
+                payload["output"] = SECRETS_OMITTED
+        elif item == "reasoning":
+            # Encrypted for the model that wrote it; nothing okWOW can read.
+            return None
+        return entry
+
+
+def tool_input_text(value: Any) -> str:
+    """A tool call's arguments as the plain strings it ran with."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return "\n".join(tool_input_text(v) for v in value.values())
+    if isinstance(value, list):
+        return "\n".join(tool_input_text(v) for v in value)
+    return ""
+
+
+# --- git context -------------------------------------------------------------
+
+
+def git(cwd: str, *args: str) -> str:
+    try:
+        return subprocess.run(
+            ["git", "-C", cwd, *args], capture_output=True, text=True, timeout=5, check=False
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def normalize_remote(url: str) -> str:
+    """host/owner/name, with any credentials in the URL left out."""
+    scp = re.match(r"^(?:[\w.-]+@)?([\w.-]+):(?!//)(.+)$", url)
+    if scp:
+        host, path = scp.groups()
+    else:
+        parts = urllib.parse.urlsplit(url)
+        host, path = parts.hostname or "", parts.path
+    path = path.strip("/")
+    path = path[:-4] if path.endswith(".git") else path
+    # okWOW compares remotes lowercased; folder paths keep their case.
+    return f"{host}/{path}".lower() if host and path else ""
+
+
+def session_start(folder: str) -> dict[str, str]:
+    """Where a session started, as okWOW's rules match it: the real folder, and
+    inside git its origin remote and the repository's (or worktree's) top folder."""
+    if not folder or not os.path.isabs(folder):
+        raise CaptureError("the session has no start folder")
+    real = os.path.realpath(folder)
+    start = {"folder": real}
+    top = git(real, "rev-parse", "--show-toplevel")
+    if top:
+        root = os.path.realpath(top)
+        if real == root or real.startswith(root.rstrip("/") + "/"):
+            start["repository_root"] = root
+        remote = normalize_remote(git(real, "remote", "get-url", "origin"))
+        if remote:
+            start["repository"] = remote
+    # Cut short, okWOW's rules could match the wrong place; send nothing instead.
+    if len(real) > FOLDER_MAX or len(start.get("repository", "")) > REPOSITORY_MAX:
+        raise CaptureError(f"the start folder or its remote is too long for okWOW: {real[:200]}")
+    return start
+
+
+def session_label(app: "App", start: dict[str, str]) -> str:
+    folder = start["folder"]
+    name = os.path.basename(start.get("repository_root") or folder)
+    branch = git(folder, "rev-parse", "--abbrev-ref", "HEAD")
+    return (f"{name} · {branch}" if branch else name)[:80] or app.agent
+
+
+# --- apps --------------------------------------------------------------------
+# Each app the plugin runs in answers three questions: is this session mine,
+# where did it start, and how is its session file read. Another app is one
+# more App in APPS.
+
+
+def first_entry(path: Path, found: Callable[[dict[str, Any]], str], lines: Optional[int] = None) -> str:
+    """The first value `found` takes from a session file's entries."""
+    with path.open(encoding="utf-8", errors="replace") as f:
+        for number, raw in enumerate(f):
+            if lines is not None and number >= lines:
+                break
+            with contextlib.suppress(ValueError, AttributeError, KeyError, TypeError):
+                value = found(json.loads(raw))
+                if value:
+                    return value
+    return ""
+
+
+@dataclass(frozen=True)
+class App:
+    name: str
+    # okWOW's name for the app.
+    agent: str
+    # Variables only this app sets in its hooks' environment; a trailing _ is a prefix.
+    env_markers: tuple[str, ...]
+    session_dirs: Callable[[], list[Path]]
+    # The start folder, from a hook's event and environment and the session file.
+    hook_start: Callable[["App", dict[str, Any], Mapping[str, str], Path], str]
+    # The start folder from the session file alone, when no hook recorded it.
+    file_start: Callable[[Path], str]
+    parse: Callable[[Session, dict[str, Any]], Optional[dict[str, Any]]]
+    # Variables naming the running session in the shell the app gives its agent.
+    session_env: tuple[str, ...] = ()
+    # Variables naming the start folder there, when no hook recorded the start.
+    folder_env: tuple[str, ...] = ()
+
+    def owns_file(self, path: Path) -> bool:
+        real = Path(os.path.realpath(path))
+        roots = [Path(os.path.realpath(r)) for r in self.session_dirs()]
+        return real.suffix == ".jsonl" and any(real.is_relative_to(root) for root in roots)
+
+    def owns_env(self, env: Mapping[str, str]) -> bool:
+        return any(k == m or (m.endswith("_") and k.startswith(m)) for k in env for m in self.env_markers)
+
+
+def _claude_dirs() -> list[Path]:
+    return [Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"]
+
+
+def _claude_hook_start(app: App, event: dict[str, Any], env: Mapping[str, str], path: Path) -> str:
+    # CLAUDE_PROJECT_DIR stays the start folder while the session's cwd moves.
+    return env.get("CLAUDE_PROJECT_DIR") or event.get("cwd") or ""
+
+
+def _claude_file_start(path: Path) -> str:
+    return first_entry(path, lambda e: e.get("cwd") if e.get("type") in KEEP_CLAUDE_LINES else "")
+
+
+def _codex_dirs() -> list[Path]:
+    base = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    return [base / "sessions", base / "archived_sessions"]
+
+
+def _codex_file_start(path: Path) -> str:
+    # The first line, written when the session starts, records its folder.
+    return first_entry(path, lambda e: e["payload"].get("cwd") if e.get("type") == "session_meta" else "", lines=1)
+
+
+def _codex_hook_start(app: App, event: dict[str, Any], env: Mapping[str, str], path: Path) -> str:
+    return _codex_file_start(session_file(app, path)) or event.get("cwd") or ""
+
+
+APPS = {
+    app.name: app
+    for app in (
+        App("claude", "Claude Code", ("CLAUDE_PROJECT_DIR", "CLAUDE_CODE_ENTRYPOINT"), _claude_dirs,
+            _claude_hook_start, _claude_file_start, Session._claude,
+            session_env=("CLAUDE_CODE_SESSION_ID",), folder_env=("CLAUDE_PROJECT_DIR",)),
+        App("codex", "Codex", ("CODEX_",), _codex_dirs, _codex_hook_start, _codex_file_start, Session._codex,
+            session_env=("CODEX_THREAD_ID",)),
+    )
+}
+
+
+def detect(path: Path, env: Mapping[str, str]) -> Optional[App]:
+    """The app whose session folders hold this file; its environment breaks a tie."""
+    owners = [app for app in APPS.values() if app.owns_file(path)]
+    if len(owners) > 1:
+        owners = [app for app in owners if app.owns_env(env)] or owners
+    return owners[0] if owners else None
+
+
+# --- upload ------------------------------------------------------------------
+
+
+def state() -> dict[str, Any]:
+    return read_json(STATE_FILE, {"sessions": {}})
+
+
+def session_key(app: App, session_id: str) -> str:
+    return f"{app.name}:{session_id}"
+
+
+def mark(key: str, app: App, path: Path, **fields: Any) -> None:
+    """Record that a session was sent or deliberately skipped, so it is
+    looked at again only once it changes."""
+    with locked():
+        current = state()
+        record = current["sessions"].setdefault(key, {})
+        record.update({"harness": app.name, "path": str(path), "handled_at": time.time(), **fields})
+        write_json(STATE_FILE, current)
+
+
+# Why okWOW skipped a session, by get_session_capture's reason.
+SKIP_REASONS = {
+    "paused": "session capture is paused in okWOW",
+    "rule": "okWOW's rule for sessions started in {} is Don't send",
+    "default": "sessions started in {} match no rule, and Everything else is Don't send in okWOW",
+    None: "okWOW's settings skip sessions started in {}",
+}
+
+
+def upload(
+    app: App, path: Path, start: Optional[dict[str, str]] = None, key: str = "", dry_run: bool = False
+) -> Optional[dict[str, Any]]:
+    """Send a session as an okWOW chat; okWOW adds only turns it has not seen.
+    okWOW is asked first, with where the session started, so a session okWOW
+    should not have is never read past its start or sent."""
+    if dry_run:
+        session = Session(app, path)
+        with contextlib.suppress(CaptureError, OSError):
+            start = start or session_start(app.file_start(path))
+        info = {"id": session.id, "agent": app.agent, **({"start": start} if start else {})}
+        arguments = {"kind": "chat", "session": info}
+        sys.stderr.write(json.dumps({**arguments, "lines": len(session.lines), "bytes": len(session.payload())}, indent=2) + "\n")
+        sys.stdout.buffer.write(session.payload())
+        return None
+    path = session_file(app, path)
+    start = start or session_start(app.file_start(path))
+    mcp = MCP(server())
+    settings = mcp.call("get_session_capture", {"start": start})
+    key = key or session_key(app, path.stem)
+    if settings.get("action") != "send":
+        log(f"skip {key}: {SKIP_REASONS.get(settings.get('reason'), SKIP_REASONS[None]).format(start['folder'])}")
+        mark(key, app, path, start=start, skipped="skip")
+        return None
+    if not (settings.get("in") or {}).get("id"):
+        raise CaptureError(f"okWOW has no space to save sessions to; choose one at {settings.get('settings_url')}")
+    session = Session(app, path)
+    if not session.id:
+        raise CaptureError(f"{path} has no session id")
+    info = {"id": session.id, "label": session_label(app, start), "agent": app.agent, "start": start}
+    if not session.first_prompt:
+        log(f"skip {key}: no prompt from you yet")
+        return None
+    payload = session.payload()
+    if len(payload) > MAX_UPLOAD_BYTES:
+        raise CaptureError(f"{path} is {len(payload)} bytes after trimming; okWOW takes at most {MAX_UPLOAD_BYTES}")
+    # No `in`: okWOW saves to the space its capture settings choose.
+    arguments: dict[str, Any] = {"kind": "chat", "session": info}
+    # okWOW takes a title as a plain name: no path separators or control characters.
+    title = " ".join(re.sub(r"[\\/\x00-\x1f\x7f]", " ", session.title).split())[:200]
+    if title:
+        arguments["title"] = title
+    prepared = mcp.call("prepare_upload", {
+        "filename": f"{session.id}.jsonl", "size_bytes": len(payload), "content_type": "text/plain", "start": start,
+    })
+    status, _, _ = fetch("PUT", prepared["upload_url"], payload, prepared.get("headers") or {"Content-Type": "text/plain"}, timeout=120)
+    if status not in (200, 201, 204):
+        raise CaptureError(f"Upload PUT failed ({status})")
+    receipt = mcp.call("create_content", {**arguments, "upload": prepared.get("upload_id") or prepared.get("id")})
+    mark(key, app, path, start=start, chat=receipt.get("id"), skipped=None)
+    log(f"uploaded {key} as {receipt.get('id')}" + (" (nothing new)" if receipt.get("duplicate") else ""))
+    return receipt
+
+
+def remember(app: App, session_id: str, path: str, event: dict[str, Any]) -> None:
+    """Note a session, and where it started the first time a hook sees it: the
+    watcher that uploads it later runs detached, outside the app's hooks."""
+    key = session_key(app, session_id)
+    start = (state()["sessions"].get(key) or {}).get("start")
+    if not start:
+        try:
+            start = session_start(app.hook_start(app, event, os.environ, Path(path)))
+        except (CaptureError, OSError) as error:
+            # The upload reads it from the session file instead.
+            log(f"start {key}: {error}")
+    with locked():
+        current = state()
+        # Every session is remembered now, so forget those long settled.
+        cutoff = time.time() - FORGET_DAYS * 86400
+        current["sessions"] = {
+            k: r for k, r in current["sessions"].items() if max(r.get("seen_at", 0), r.get("handled_at", 0)) > cutoff
+        }
+        record = current["sessions"].setdefault(key, {})
+        record.update({"harness": app.name, "path": path, "seen_at": time.time()})
+        record.pop("cwd", None)
+        if start and not record.get("start"):
+            record["start"] = start
+        write_json(STATE_FILE, current)
+
+
+def handled(record: dict[str, Any], modified: float) -> bool:
+    return modified <= record.get("handled_at", record.get("uploaded_at", 0))
+
+
+def sweep(idle_minutes: Optional[float] = None, only: Optional[str] = None) -> None:
+    """Upload every remembered session that went idle with unsent turns."""
+    # One sweep at a time. A full sweep that finds one running leaves the work to
+    # it; a sweep for one ended session waits its turn, since the running one may
+    # not include it.
+    with locked(blocking=False, path=SWEEP_LOCK_FILE, wait=SWEEP_WAIT_SECONDS if only else 0) as acquired:
+        if acquired:
+            _sweep(idle_minutes, only)
+
+
+def _sweep(idle_minutes: Optional[float], only: Optional[str]) -> None:
+    idle = 60 * (idle_minutes if idle_minutes is not None else config().get("idle_minutes", DEFAULT_IDLE_MINUTES))
+    for key, record in list(state()["sessions"].items()):
+        if only and key != only:
+            continue
+        path = Path(record.get("path", ""))
+        try:
+            modified = path.stat().st_mtime
+        except OSError:
+            continue
+        app = APPS.get(record.get("harness", ""))
+        if app is None or time.time() - modified < idle or handled(record, modified):
+            continue
+        try:
+            upload(app, path, record.get("start"), key)
+        except Exception as error:  # noqa: BLE001 — one bad session must not stop the rest
+            log(f"error {key}: {error}")
+
+
+def watch_lock(key: str) -> Path:
+    return STATE_DIR / f"watch-{hashlib.sha256(key.encode()).hexdigest()[:16]}.lock"
+
+
+def watching(key: str) -> bool:
+    """Whether a watcher already holds this session."""
+    with locked(blocking=False, path=watch_lock(key)) as acquired:
+        return not acquired
+
+
+def watch(key: str) -> None:
+    """One per active session: uploads it once it has sat idle, with no other
+    hook needed to notice, and exits when it is sent or the session is gone."""
+    with locked(blocking=False, path=watch_lock(key)) as acquired:
+        if not acquired:
+            return
+        idle = 60 * config().get("idle_minutes", DEFAULT_IDLE_MINUTES)
+        deadline = time.time() + WATCH_HOURS * 3600
+        while time.time() < deadline:
+            record = state()["sessions"].get(key)
+            if not record:
+                return
+            path = Path(record.get("path", ""))
+            try:
+                modified = path.stat().st_mtime
+            except OSError:
+                return
+            if handled(record, modified):
+                return
+            wait = idle - (time.time() - modified)
+            app = APPS.get(record.get("harness", ""))
+            if app is None:
+                return
+            if wait <= 0:
+                try:
+                    upload(app, path, record.get("start"), key)
+                except Exception as error:  # noqa: BLE001 — logged, never raised into a hook
+                    log(f"error {key}: {error}")
+                return
+            time.sleep(min(wait, 600) + 1)
+
+
+def spawn(*args: str) -> None:
+    with os.fdopen(log_handle(), "a") as out:
+        # -I: PYTHON* variables in the agent's environment cannot load code here.
+        subprocess.Popen(
+            [sys.executable, "-I", os.path.abspath(__file__), *args],
+            stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True,
+        )
+
+
+def ask_once() -> bool:
+    """True the first time only, across every session that races for it."""
+    private_dir(CONFIG_DIR)
+    try:
+        os.close(os.open(ASKED_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    except FileExistsError:
+        return False
+    return True
+
+
+# --- commands ----------------------------------------------------------------
+
+
+def hook() -> None:
+    """Called by the app's hooks; returns at once and never fails the session."""
+    try:
+        event = json.load(sys.stdin)
+    except ValueError:
+        return
+    name = event.get("hook_event_name", "")
+    if not TOKEN_FILE.exists():
+        # A fresh install: open okWOW's sign-in once, from the first session.
+        if name == "SessionStart" and ask_once():
+            spawn("login", "--quiet")
+        return
+    session_id = event.get("session_id") or ""
+    path = event.get("transcript_path") or ""
+    app = detect(Path(path), os.environ) if path else None
+    key = session_key(app, session_id) if app and session_id else ""
+    if key:
+        remember(app, session_id, path, event)
+    if name == "SessionEnd" and key:
+        spawn("sweep", "--idle-minutes", "0", "--only", key)
+    elif name == "Stop" and key and not watching(key):
+        spawn("watch", key)
+    elif name == "SessionStart":
+        # Sessions left idle across a restart, when no watcher survived.
+        spawn("sweep")
+
+
+def command_login(args: argparse.Namespace) -> None:
+    cfg = config()
+    cfg["server"] = checked_server(args.server or cfg.get("server") or plugin_server())
+    write_json(CONFIG_FILE, cfg)
+    ask_once()
+    outcome = login(cfg["server"])
+    print(f"Signed in to okWOW as {outcome.get('email') or 'you'}. The okWOW tools use this sign-in too: "
+          "new sessions pick it up; in a session that is already open, reconnect the okwow MCP server.")
+    print(describe(outcome["settings"]))
+
+
+def command_headers(_: argparse.Namespace) -> None:
+    """The plugin's MCP connection signs in with the same okWOW sign-in as capture."""
+    headers: dict[str, str] = {}
+    try:
+        # Only for the server this plugin's MCP connection talks to.
+        if connection().get("server") == checked_server(plugin_server()):
+            headers["Authorization"] = f"Bearer {access_token()}"
+    except Exception as error:  # noqa: BLE001 — stdout must stay a JSON object
+        log(f"headers: {error}")
+    if not headers and not TOKEN_FILE.exists() and ask_once():
+        spawn("login", "--quiet")
+    print(json.dumps(headers))
+
+
+def command_logout(_: argparse.Namespace) -> None:
+    saved = read_json(TOKEN_FILE, {}, private=True)
+    if saved.get("store") == "keychain":
+        security("delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", saved.get("server", ""))
+    with contextlib.suppress(FileNotFoundError):
+        TOKEN_FILE.unlink()
+    print("Signed out of okWOW on this machine: the okWOW tools and session capture stop until you sign in "
+          f"again. To revoke the connection too, remove \"{CLIENT_NAME}\" in okWOW under Settings → Authorized apps.")
+
+
+def command_status(_: argparse.Namespace) -> None:
+    saved = read_json(TOKEN_FILE, {}, private=True)
+    print(f"Server: {server()}")
+    if not saved:
+        print("Signed in: no. Run `okwow-capture login` to start saving sessions.")
+        return
+    print(f"Signed in: {saved.get('profile', {}).get('email') or 'yes'} "
+          f"(sign-in kept in the {'Keychain' if saved.get('store') == 'keychain' else 'token file'})")
+    settings = MCP(server()).call("get_session_capture", {})
+    print(describe(settings))
+    print(f"Sent after {config().get('idle_minutes', DEFAULT_IDLE_MINUTES)} idle minutes, or when a session ends.")
+    sessions = state()["sessions"]
+    sent = sum(1 for r in sessions.values() if str(r.get("chat", "")).startswith("chat:"))
+    print(f"Sessions seen: {len(sessions)}, saved as chats: {sent}. Log: {LOG_FILE}")
+
+
+def current_start(env: Mapping[str, str]) -> dict[str, str]:
+    """Where the session running this command started: the start its hooks
+    remembered, else the app's start folder, else the current folder."""
+    folder = ""
+    for app in APPS.values():
+        if not app.owns_env(env):
+            continue
+        session_id = next((env[v] for v in app.session_env if env.get(v)), "")
+        start = (state()["sessions"].get(session_key(app, session_id)) or {}).get("start") if session_id else None
+        if start:
+            return start
+        folder = folder or next((env[v] for v in app.folder_env if env.get(v)), "")
+    return session_start(folder or os.getcwd())
+
+
+def command_start(args: argparse.Namespace) -> None:
+    """Print a start for okWOW's session capture rule tools; sends nothing."""
+    if args.folder:
+        folder = os.path.realpath(os.path.expanduser(args.folder))
+        if not os.path.isdir(folder):
+            raise CaptureError(f"no such folder: {args.folder}")
+        start = session_start(folder)
+    else:
+        start = current_start(os.environ)
+    if args.repository:
+        top = git(start["folder"], "rev-parse", "--show-toplevel")
+        if not top:
+            raise CaptureError(f"{start['folder']} is not inside a git repository")
+        start = session_start(top)
+    print(json.dumps(start))
+
+
+def command_upload(args: argparse.Namespace) -> None:
+    path = Path(args.path).expanduser()
+    app = APPS[args.harness] if args.harness else detect(path, os.environ)
+    if app is None:
+        raise CaptureError(f"{path} is not in any supported app's session folders; name the app with --harness")
+    receipt = upload(app, path, dry_run=args.dry_run)
+    if receipt:
+        print(f"Saved: {receipt.get('url') or receipt.get('id')}")
+    elif not args.dry_run:
+        print(f"Nothing sent; see {LOG_FILE}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="okwow-capture", description=__doc__.split("\n\n")[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("login", help="sign in to okWOW and start saving sessions")
+    p.add_argument("--server", help=f"okWOW MCP URL (default: the plugin's, {PRODUCTION_SERVER})")
+    p.add_argument("--quiet", action="store_true", help=argparse.SUPPRESS)
+    p.set_defaults(run=command_login)
+    sub.add_parser("logout", help="sign out of okWOW on this machine").set_defaults(run=command_logout)
+    sub.add_parser("headers", help="print the okWOW sign-in for the plugin's MCP connection").set_defaults(
+        run=command_headers)
+    sub.add_parser("status", help="show where sessions go and what was sent").set_defaults(run=command_status)
+    p = sub.add_parser("start", help="print where this session started, as okWOW's capture rules match it "
+                       "(sends nothing)")
+    p.add_argument("--folder", help="a folder to print the start for, instead of this session's")
+    p.add_argument("--repository", action="store_true",
+                   help="use the top folder of its git repository, so a rule covers the repository's clones and worktrees")
+    p.set_defaults(run=command_start)
+    p = sub.add_parser("upload", help="send one session now")
+    p.add_argument("path")
+    p.add_argument("--harness", choices=sorted(APPS), help="the app that wrote the file (default: detected from its folder)")
+    p.add_argument("--dry-run", action="store_true", help="print the redacted session instead of sending it")
+    p.set_defaults(run=command_upload)
+    p = sub.add_parser("sweep", help="send sessions that went idle")
+    p.add_argument("--idle-minutes", type=float)
+    p.add_argument("--only")
+    p.set_defaults(run=lambda a: sweep(a.idle_minutes, a.only))
+    p = sub.add_parser("watch", help="upload one session once it goes idle")
+    p.add_argument("key")
+    p.set_defaults(run=lambda a: watch(a.key))
+    sub.add_parser("hook", help="entry point for the app's hooks").set_defaults(run=lambda _: hook())
+    args = parser.parse_args()
+    background = args.command in ("hook", "sweep", "watch") or getattr(args, "quiet", False)
+    try:
+        args.run(args)
+    except CaptureError as error:
+        if background:
+            log(f"error: {error}")
+            return
+        sys.exit(f"okwow-capture: {error}")
+    except Exception as error:  # noqa: BLE001
+        if background:
+            log(f"error: {type(error).__name__}: {error}")
+            return
+        raise
+
+
+if __name__ == "__main__":
+    main()

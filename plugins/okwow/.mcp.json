@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "okwow": {
+      "type": "http",
+      "url": "${OKWOW_MCP_URL:-https://api.okwow.ai/mcp}",
+      "headersHelper": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/scripts/okwow-capture\" headers"
+    }
+  }
+}
