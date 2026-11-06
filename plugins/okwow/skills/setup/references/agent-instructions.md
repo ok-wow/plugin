@@ -85,10 +85,10 @@ memories.
    use it. A local pointer file fetches the okWOW copy each time it runs.
    To change the skill, `fetch` it and `update_content` it with that
    `version`; never edit the pointer.
-5. **Track work as okWOW tasks** (they need shared mode). Give each
-   workstream a task, claim it with your session, keep its todos current, ask
-   the user before you block it on a person, and complete it with a report. The okWOW save skill's tasks reference has
-   the details.
+5. **Track work as okWOW tasks** (they need shared mode). Give each workstream
+   a task, claim it with your session, keep its todos current, ask the user
+   before you block it on a person, and complete it with a report. The okWOW
+   save skill's tasks reference has the details.
 <!-- okwow:end -->
 ```
 

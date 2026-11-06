@@ -67,8 +67,8 @@ A private space counts as shared: in shared mode a save there reaches whoever
 is a member, now or later.
 
 Switching changes where new saves land. An item saved earlier keeps its
-audience. These tools move only skills between places (below); moving any
-other item from private to shared is done in the okWOW app.
+audience. These tools move only skills between places (below); to share
+another item, save it again in shared mode.
 
 ## Item kinds
 
