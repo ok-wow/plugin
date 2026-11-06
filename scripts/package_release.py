@@ -34,6 +34,7 @@ def main():
     # Explicit inventory: local capture scripts/hooks and test fixtures are not web components.
     for skill in ('recall', 'save'):
         shared[f'skills/{skill}/SKILL.md'] = (PLUGIN / f'skills/{skill}/SKILL.md').read_bytes()
+    shared['skills/save/references/tasks.md'] = (PLUGIN / 'skills/save/references/tasks.md').read_bytes()
     openai = {key: source[key] for key in ('name', 'version', 'author', 'license')}
     openai.update({'$schema': 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
                    'description': 'Find team knowledge and save memories and documents in okWOW.',

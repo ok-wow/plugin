@@ -7,11 +7,12 @@ connects your agent to the okWOW MCP server and adds four skills:
 - **recall**: searches okWOW before answering questions about past decisions,
   conventions and project facts, then fetches and cites what it used.
 - **save**: saves a verified fact as a memory or a write-up as a document, in a
-  destination you choose.
+  destination you choose, and shows the agent how to claim, work and complete
+  okWOW tasks.
 - **setup**: a guided setup in chat (`/okwow:setup`): reads your okWOW account
   and your agent's setup first, then sets up people, spaces, skills,
-  transcripts and session capture, and can move your agent's local memory
-  into okWOW.
+  transcripts and session capture, can move your agent's local memory
+  into okWOW, and can schedule an agent to work through your tasks.
 - **capture**: checks and changes session capture, which saves your agent
   sessions as okWOW chats (see [Send your sessions to okWOW](#send-your-sessions-to-okwow)).
 

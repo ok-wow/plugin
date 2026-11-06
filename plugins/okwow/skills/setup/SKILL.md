@@ -1,7 +1,7 @@
 ---
 name: setup
 description: Use when the user asks to set up okWOW, get started with okWOW, or bring their team, spaces, people, skills, meetings or agent memory into okWOW (for example "set up okWOW", "/okwow:setup", "move my agent's memory into okWOW", "import my meeting transcripts", "invite my team"). Runs a guided setup in chat that reads what is already there first and only asks about gaps.
-argument-hint: "[people | spaces | knowledge | transcripts | memory | capture]"
+argument-hint: "[people | spaces | knowledge | transcripts | memory | capture | tasks]"
 ---
 
 # Set up okWOW
@@ -9,7 +9,8 @@ argument-hint: "[people | spaces | knowledge | transcripts | memory | capture]"
 You run the user's okWOW setup in this chat, through the `okwow` MCP server,
 as the signed-in user. The in-app onboarding already set their profile, their
 agent's name and their plan: do not redo those. If the user named one part
-(people, spaces, knowledge, transcripts, memory, capture), run that step alone.
+(people, spaces, knowledge, transcripts, memory, capture, tasks), run that step
+alone.
 
 Rules for every step:
 
@@ -107,19 +108,55 @@ Only if the user wants it. Read `references/memory-migration.md` now and
 follow it; it covers where each agent keeps memory, how to propose and save
 each fact, and how to turn local memory off reversibly.
 
-## 7. Session capture, then recap
+## 7. Session capture
 
 For each repository or folder from step 1 whose sessions should go somewhere
 other than where `get_session_capture` says, follow the `capture` skill's
 "Choose where a folder's sessions go" (one confirmed
 `set_session_capture_rule` per rule).
 
-Finish with a short recap: what you created, invited, joined, saved and
-changed, each with its `url` where a receipt gave one, and what still needs
-the browser: connecting tools (okWOW → Plugins), creating an organization,
-billing and seats, and granting an agent access to connected accounts such
-as Gmail (okWOW → Settings → Authorized apps → Manage access). Never try to
-do those yourself.
+## 8. A scheduled task check
+
+Offer this only if the user wants an agent to work through their okWOW tasks
+on a schedule. It needs "Read and write" and an app that runs scheduled or
+recurring tasks; if yours does not, say so and skip this step.
+
+The check runs unattended and completes the tasks it finishes, with a
+completion report. Nothing waits for review: the user reads the reports in
+okWOW and reopens a task whose work is wrong. Agree with the user on how often
+it runs (suggest once each weekday morning), which spaces it covers (default:
+all of theirs) and how many tasks one run may take (default 3). Show them the
+prompt below with those filled in, get one yes, then create the recurring task
+with your app's own scheduler. The run must be allowed to call the okWOW tools
+without asking each time; if your app needs a setting for that, tell the user
+which one.
+
+> Work through my okWOW tasks that an agent can finish on its own. First read
+> the okWOW save skill's `references/tasks.md` and follow it, passing this
+> run's session on every task call.
+>
+> 1. Call `list_tasks` with `owner: "me"`, `status: "open"` and
+>    `claimed: "unclaimed"` (and `in` for each chosen space).
+> 2. Pick at most <N> tasks you can finish completely with your own tools and
+>    access, without a decision from a person. Skip any task that would send,
+>    post or publish anything as me (email, chat messages, comments, invites),
+>    spend money or delete anything, and any task you are unsure about.
+> 3. For each one: `start` it, keep its `todos` current, do the work, and
+>    `complete` it with a full report. If it turns out to need a person, block
+>    it with exactly what they must do, and move on.
+> 4. End with the tasks you completed, blocked and skipped, and why.
+
+To change or stop the check later, the user edits or deletes that recurring
+task in their app.
+
+## 9. Recap
+
+Finish with a short recap: what you created, invited, joined, saved, scheduled
+and changed, each with its `url` where a receipt gave one, and what still
+needs the browser: connecting tools (okWOW → Plugins), creating an
+organization, billing and seats, and granting an agent access to connected
+accounts such as Gmail (okWOW → Settings → Authorized apps → Manage access).
+Never try to do those yourself.
 
 ## Errors
 

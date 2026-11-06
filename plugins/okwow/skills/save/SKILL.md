@@ -1,6 +1,6 @@
 ---
 name: save
-description: Use whenever the user asks to remember, save, record, note, or write something up in okWOW (for example "remember this in okWOW", "save this to okWOW", "add this to our team knowledge"), or confirms a decision or finding from this session should be kept. Load this before calling create_memory, create_content, prepare_upload or create_task; it covers choosing memory vs artifact vs file, the place and its audience, updates, and safe retries.
+description: Use whenever the user asks to remember, save, record, note, or write something up in okWOW (for example "remember this in okWOW", "save this to okWOW", "add this to our team knowledge"), or confirms a decision or finding from this session should be kept. Load this before calling create_memory, create_content, prepare_upload, create_task or update_task, and before working on an okWOW task; it covers choosing memory vs artifact vs file, the place and its audience, updates, and safe retries.
 argument-hint: "[what to save]"
 ---
 
@@ -82,6 +82,11 @@ returns the first task with `duplicate: true`. Use `list_tasks` to find tasks
 (ids are `task:<uuid>`), then `update_task` to `start`, `complete`, `drop` (with a
 reason), `reopen`, `assign` or `set_due`; this needs the editor role in that
 space.
+
+Before you work on a task (claim it, update its checklist, block, complete or
+drop it), read `references/tasks.md` and follow it: it covers passing your
+session, claims and how they lapse, asking a person, and the completion
+report.
 
 ## 6. Retries
 

@@ -1,5 +1,6 @@
 """Exercise release archives at their host-facing boundary (stdlib only)."""
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -21,6 +22,10 @@ with tempfile.TemporaryDirectory() as tmp:
             assert {'skills/recall/SKILL.md', 'skills/save/SKILL.md', 'LICENSE'} <= names
             assert not any(n.startswith(('hooks/', 'scripts/', 'skills/capture/', '.git/', 'tests/')) for n in names)
             assert all(not n.startswith('/') and '..' not in Path(n).parts for n in names)
+            # A packaged skill that tells the agent to read a reference must ship it.
+            for skill in [n for n in names if n.endswith('/SKILL.md')]:
+                for ref in re.findall(r'`(references/[\w.-]+)`', archive.read(skill).decode()):
+                    assert str(Path(skill).parent / ref) in names, f'{skill} cites missing {ref}'
             if host == 'gemini':
                 assert data['mcpServers']['okwow']['httpUrl'] == 'https://api.okwow.ai/mcp'
             else:
