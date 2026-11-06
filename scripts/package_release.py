@@ -24,6 +24,8 @@ def main():
     gemini = json.loads((ROOT / 'gemini-extension.json').read_text())
     if gemini['version'] != version:
         parser.error('Gemini and plugin versions must agree')
+    # The package has no relay script: Gemini CLI signs in to the hosted server itself.
+    gemini['mcpServers'] = {'okwow': {'httpUrl': 'https://api.okwow.ai/mcp'}}
     interface = json.loads((ROOT / 'submission/openai-interface.json').read_text())
     if not 0 < len(interface['shortDescription']) <= 30:
         parser.error('OpenAI subtitle must be 1–30 characters')

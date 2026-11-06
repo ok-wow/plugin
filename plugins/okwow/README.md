@@ -2,7 +2,7 @@
 
 Find team decisions and project context, then save knowledge back to okWOW when asked.
 
-Connect the hosted MCP server at `https://api.okwow.ai/mcp` through your host's OAuth flow. Review the account and permissions before approving. The `recall` skill searches and cites your available knowledge; `save` helps choose an audience and save a memory or document.
+The plugin connects to the hosted MCP server at `https://api.okwow.ai/mcp`. Each app signs in once, under its own name, for its okWOW tools and its session capture; web hosts connect through their own OAuth flow. Review the account and permissions before approving. The `recall` skill searches and cites your available knowledge; `save` helps choose an audience and save a memory or document.
 
 An okWOW account is required.
 
