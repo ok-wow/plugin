@@ -82,10 +82,11 @@ memories.
      place.
    - Correct a stale memory with `update_memory`; do not add a duplicate.
 4. **Skills live in okWOW.** Save a reusable skill to a space so teammates can
-   use it. A local pointer file fetches the okWOW copy each time it runs.
+   use it. In private mode the saved skill is the user's own; share it with
+   `update_content` and `in`, then tell the user who can now use it. A local pointer file fetches the okWOW copy each time it runs.
    To change the skill, `fetch` it and `update_content` it with that
    `version`; never edit the pointer.
-5. **Track work as okWOW tasks** (they need shared mode). Give each workstream
+5. **Track work as okWOW tasks** (creating one needs shared mode). Give each workstream
    a task, claim it with your session, keep its todos current, ask the user
    before you block it on a person, and complete it with a report. The okWOW
    save skill's tasks reference has the details.

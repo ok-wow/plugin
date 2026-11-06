@@ -8,7 +8,8 @@ description: Use at the start of every task, to check what is already recorded a
 okWOW holds the team's memories, vault items (artifacts, files, transcripts, skills) and tasks. The `okwow` MCP server
 reads them as the signed-in user, with exactly the access they have in okWOW:
 the spaces (team areas) they have joined, their organization's memories and,
-in private mode (`switch_mode`), their own items. Every result carries `mode`.
+in private mode (`switch_mode`), their own items. Every result carries `mode`:
+read it, because in shared mode the user's own items are not returned.
 
 Read `references/how-okwow-works.md` when you need the model behind a tool:
 places, roles, modes, item kinds, the graph, versions, deleting and session

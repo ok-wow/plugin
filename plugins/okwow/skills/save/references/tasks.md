@@ -4,6 +4,8 @@ A task is a to-do on a space's board. An agent works one in this order: find
 it, claim it, keep its checklist current, then complete it, drop it or ask a
 person. Every change goes through `update_task` and needs the editor role in
 the task's space; each call returns the task as `list_tasks` shows it.
+Creating a task needs shared mode; finding, claiming, updating and finishing
+an existing one work in either mode.
 
 ## Your session
 

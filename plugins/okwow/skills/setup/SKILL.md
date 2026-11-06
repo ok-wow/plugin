@@ -12,6 +12,9 @@ agent's name and their plan: do not redo those. If the user named one part
 (people, spaces, knowledge, transcripts, memory, defaults, capture, tasks), run
 that step alone.
 
+For places, roles, audiences and connection modes, read the recall skill's
+`references/how-okwow-works.md`; for refusals, its `references/errors.md`.
+
 Rules for every step:
 
 - **Read before you ask.** Never ask what their setup already answers.
@@ -102,8 +105,10 @@ after one approval.
 For other files the user picks (`SKILL.md` skills, documents), into the
 space they chose: `prepare_upload` with the
 exact byte size, `PUT` the bytes, then `create_content` with the `upload` id.
-A skill needs editor in the space (any member may keep one in the
-organization or in `me`); only its `SKILL.md` goes with it, so inline what
+A skill needs editor in the space; any member may also keep one in the
+organization (shared mode) or in `me` (private mode). In private mode a skill
+saved in a space is the user's own until `update_content` with `in` shares
+it. Only its `SKILL.md` goes with it, so inline what
 teammates need from its other files. Pass `kind` when a filename is
 ambiguous. To keep a local pointer to the okWOW copy, see "A skill pointer"
 in `references/agent-instructions.md`. The `save` skill covers retries and

@@ -28,9 +28,11 @@ audience (its `list_spaces` row), and state both when you report the save.
 Save in the mode you are in. When a private save holds something teammates
 need, say it is private and suggest shared mode. Call `switch_mode` only when
 the user says so. Switching changes where new saves land; an item saved
-earlier keeps its audience. A private space counts as shared: a shared-mode
-save there reaches whoever is a member later. Private mode refuses saves to
-`org:` and `create_task`; shared mode refuses `me`.
+earlier keeps its audience. The mode belongs to this connection and stays
+until someone switches it, across sessions. A space with a `private` audience
+still has members: a shared-mode save there reaches them, and anyone added
+later. Private mode refuses saves to `org:` and `create_task`; shared mode
+refuses `me`.
 
 `../recall/references/how-okwow-works.md` (in the recall skill) explains
 places, roles, modes and item kinds in full. When a call is refused, read the
@@ -103,9 +105,12 @@ copy instead of adding a second one.
 
 If you saved something wrong, or to the wrong place, `delete_content` with its
 id removes it for every member of the place, and the user cannot restore it
-themselves. Delete your own just-made save and tell the user; confirm with
-the user before deleting anything else. Then save it again in the right
-place.
+themselves. Delete a save you made in this session when it is wrong, and tell
+the user; confirm with the user before deleting anything else. Then save it
+again in the right place.
+
+To share an item you saved privately, save it again in shared mode, then
+offer to delete the private copy so search does not return both.
 
 ## 5. Write it so it holds up later
 
@@ -114,7 +119,7 @@ place.
 - Put web pages or PRs an artifact relies on in `source_urls`.
 - A memory has no URL field. To cite a web source, save it as an artifact
   first, then pass its `vault:<uuid>` id as the memory's `source`. The cited
-  item must be readable in the same audience.
+  item must be readable in the same place.
 - Never save secrets, tokens, or personal data the user did not ask you to
   keep.
 
