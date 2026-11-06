@@ -26,6 +26,10 @@ Show the block below and ask about the parts that vary:
 - **What stays local:** by default, personal preferences, machine setup and
   notes about the agent's own tooling.
 - **Skills and tasks:** keep or drop those items.
+- **Mode:** a new connection is in private mode, where every save is the
+  user's alone. Ask whether to switch this connection to shared mode, so team
+  saves reach the members of the place. Switch with `switch_mode` only on
+  their yes, and say that other connections keep their own mode.
 
 Apply their changes to the text. Then show the exact text and the file path,
 and write nothing until the user says yes.
@@ -63,21 +67,27 @@ memories.
    4. Ask the person `list_paths` names as owner, or ask the user.
 3. **Save team knowledge to okWOW, not local memory.** When you learn
    something a teammate will need later (a decision, a convention, a gotcha,
-   a reference to an external system), save it to <default space> with the
-   okWOW save skill, without waiting to be asked, and tell the user what you
-   saved and where. Keep <what stays local> in local memory.
+   a reference to an external system), save it with the okWOW save skill,
+   without waiting to be asked, to the place whose topic and members fit
+   (<default space> when nothing fits better), and tell the user what you
+   saved, where and who can see it. Ask when no place clearly fits. Save in
+   the connection's current mode: in private mode a save is the user's
+   alone, so suggest shared mode when teammates need the fact, and switch
+   only when the user says so. Keep <what stays local> in local memory.
    - One fact per memory, at most 1,000 characters, third person, absolute
      dates. No local paths, ports or secrets. Save longer material as an
      artifact and cite it.
-   - Check who can see a place before you save anything about a person, a
-     customer or an unreleased plan.
+   - Ask before you save anything about a person or a customer, an
+     unreleased plan, or anything near a secret, and check who can see the
+     place.
    - Correct a stale memory with `update_memory`; do not add a duplicate.
 4. **Skills live in okWOW.** Save a reusable skill to a space so teammates can
-   use it. If the user wants a local copy, keep a pointer file that fetches
-   the okWOW one. Edit the okWOW copy, never the pointer.
-5. **Track work as okWOW tasks.** Give each workstream a task, claim it with
-   your session, keep its todos current, block it while you wait on a person
-   and complete it with a report. The okWOW save skill's tasks reference has
+   use it. A local pointer file fetches the okWOW copy each time it runs.
+   To change the skill, `fetch` it and `update_content` it with that
+   `version`; never edit the pointer.
+5. **Track work as okWOW tasks** (they need shared mode). Give each
+   workstream a task, claim it with your session, keep its todos current, ask
+   the user before you block it on a person, and complete it with a report. The okWOW save skill's tasks reference has
    the details.
 <!-- okwow:end -->
 ```
@@ -88,9 +98,12 @@ instead of "save it without waiting to be asked".
 
 ## A skill pointer
 
-When the user moves a local skill into okWOW (setup step 5) and wants to keep
-a local copy, replace the body of its `SKILL.md` with a pointer. Keep the
-frontmatter, so the skill still loads on the same requests:
+When the user moves a local skill into okWOW (setup step 5) and wants it to
+keep loading locally, replace the body of its `SKILL.md` with a pointer. The
+pointer is not a copy: it fetches the okWOW skill every time it runs, so
+everyone uses the current text, and it stops working while okWOW is not
+connected. Keep the frontmatter, so the skill still loads on the same
+requests:
 
 ```markdown
 ---
@@ -105,3 +118,9 @@ connected, say so and stop.
 ```
 
 Leave any files next to `SKILL.md` (references, scripts) where they are.
+They stay local and do not reach teammates, who get only the okWOW
+`SKILL.md` text.
+
+To change the skill, edit the okWOW copy: `fetch` its `vault:` id, then call
+`update_content` with the same id, the returned `version` and the new
+`content`. Never edit the pointer to change the instructions.

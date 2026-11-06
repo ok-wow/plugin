@@ -83,8 +83,11 @@ Plan the spaces from step 2 against what `list_spaces` returned, then:
   the organization may join) and `members`, each with a `role` (`viewer`
   reads, `editor` also saves, `admin` also manages the space).
 - `update_space` changes details, `audience`, `add` and `remove`. Only the
-  change is applied and everyone else keeps their role. Never drop an
-  existing member unless the user named them for removal.
+  change is applied and everyone else keeps their role. Details and members
+  need admin; only the owner changes the audience. Never drop an existing
+  member, add people or widen an audience unless the user named the change,
+  and say who newly gains access first. An `org` space lets anyone in the
+  organization join, as an editor, and see what it holds.
 
 People are named by `user_id`, email or `entity:` id; a name alone is never
 resolved: look it up with `search_entities` or `list_spaces` members first.
@@ -99,8 +102,12 @@ after one approval.
 For other files the user picks (`SKILL.md` skills, documents), into the
 space they chose: `prepare_upload` with the
 exact byte size, `PUT` the bytes, then `create_content` with the `upload` id.
-A skill needs admin in the space; pass `kind` when a filename is ambiguous.
-The `save` skill covers retries and receipts.
+A skill needs editor in the space (any member may keep one in the
+organization or in `me`); only its `SKILL.md` goes with it, so inline what
+teammates need from its other files. Pass `kind` when a filename is
+ambiguous. To keep a local pointer to the okWOW copy, see "A skill pointer"
+in `references/agent-instructions.md`. The `save` skill covers retries and
+receipts.
 
 ## 6. Move local agent memory into okWOW
 
@@ -115,7 +122,8 @@ Offer this to every user who connected with "Read and write". Read
 block into the user's instruction file, after they adjust its terms and
 confirm, so that every session checks okWOW before it works, saves team
 knowledge to okWOW instead of local memory, keeps skills in okWOW and tracks
-work as tasks.
+work as tasks. It also asks whether to switch this connection to shared mode,
+so that team saves reach the team.
 
 ## 8. Session capture
 
@@ -177,3 +185,5 @@ Never try to do those yourself.
   step: ask the user to take that step, or to sign this app in to okWOW again
   (see the capture skill's Connect section), then reconnect the okwow MCP
   server.
+- Anything else: `../recall/references/errors.md` (in the recall skill) lists each
+  refusal and the next step.

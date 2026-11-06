@@ -18,6 +18,9 @@ the user's default space, unless their rules in okWOW send it elsewhere or
 skip it. Secrets (API keys, tokens, passwords, connection strings, and the
 output of commands or files that hold credentials) are redacted on this
 machine before upload.
+The current session is captured too, so redaction is a safety net, not a
+reason to paste secrets into it. Choosing a space files the chat there; it
+does not share it with the space's members.
 
 The command is the plugin's `scripts/okwow-capture`: two folders up from this
 skill's folder, at `../../scripts/okwow-capture` relative to this `SKILL.md`.

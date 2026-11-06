@@ -203,9 +203,16 @@ approve access.
 | `set_session_capture_rule` | Read and write | Sends a folder's or repository's sessions to a space, or skips them |
 | `remove_session_capture_rule` | Read and write | Removes a folder's or repository's rule |
 | `search`, `fetch` | Read | Finds knowledge and reads exact items with source links |
-| `list_memories`, `list_tasks` | Read | Browses saved knowledge and tasks |
+| `list_memories`, `list_items`, `list_tasks` | Read | Browses saved memories, Vault items and tasks |
+| `search_entities`, `get_node`, `list_edges`, `list_paths` | Read | Reads the knowledge graph of people and subjects |
+| `prepare_upload` | Read and write | Starts a file upload |
 | `create_memory`, `create_content`, `create_task` | Read and write | Saves knowledge, content and tasks |
 | `update_memory`, `update_content`, `update_task` | Read and write | Changes existing items within your permissions |
+| `delete_content` | Read and write | Deletes one item for every member of its place |
+
+Tools for accounts you connected in okWOW and shared with this connection
+(email, chat, calendar, meetings) also appear, named `<app>_<tool>`. They act
+as you in that account.
 
 The server may expose additional tools. The live connection defines its current
 contract; see [MCP documentation](https://okwow.ai/docs/okwow-mcp/).
@@ -222,8 +229,8 @@ plugins/okwow/
   .mcp.json                       okWOW MCP server: a local relay, signed in as the app
   hooks/hooks.json                session capture hooks, for every app
   scripts/okwow-capture           sign-in, MCP relay and session capture (Python 3, no dependencies)
-  skills/recall/SKILL.md
-  skills/save/SKILL.md
+  skills/recall/SKILL.md          plus references/ loaded on demand
+  skills/save/SKILL.md            plus references/ loaded on demand
   skills/setup/SKILL.md           plus references/ loaded on demand
   skills/capture/SKILL.md
 ```
