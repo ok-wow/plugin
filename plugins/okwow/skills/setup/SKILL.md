@@ -119,6 +119,9 @@ knowledge to okWOW instead of local memory, keeps skills in okWOW and tracks
 work as tasks. It also asks whether to switch this connection to shared mode,
 so that team saves reach the team.
 
+Then offer to start every new session with the user's okWOW memory groups
+in place of your own memory: read `references/okwow-memory.md`.
+
 ## 8. Session capture
 
 For each repository or folder from step 1 whose sessions should go somewhere
