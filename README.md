@@ -12,7 +12,8 @@ connects your agent to the okWOW MCP server and adds four skills:
 - **setup**: a guided setup in chat (`/okwow:setup`): reads your okWOW account
   and your agent's setup first, then sets up people, spaces, skills,
   transcripts and session capture, can move your agent's local memory
-  into okWOW, and can schedule an agent to work through your tasks.
+  into okWOW, can make okWOW your agent's default for memory, skills and
+  tasks, and can schedule an agent to work through your tasks.
 - **capture**: checks and changes session capture, which saves your agent
   sessions as okWOW chats (see [Send your sessions to okWOW](#send-your-sessions-to-okwow)).
 

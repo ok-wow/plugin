@@ -1,6 +1,6 @@
 ---
 name: recall
-description: Use before answering any question about what the user or their team decided, agreed, prefers, or usually does (conventions, policies, past decisions, project history, meeting outcomes, people and customers, open tasks), even when a repository is open, because those agreements live in okWOW rather than in code. Searches okWOW, fetches the items it relies on, and cites them.
+description: Use at the start of every task, to check what is already recorded and what others are doing, and before answering any question about what the user or their team decided, agreed, prefers, or usually does (conventions, policies, past decisions, project history, meeting outcomes, people and customers, open tasks), even when a repository is open, because those agreements live in okWOW rather than in code. Searches okWOW, fetches the items it relies on, and cites them.
 ---
 
 # Recall from okWOW
@@ -14,14 +14,25 @@ in private mode (`switch_mode`), their own items.
 
 Search okWOW before you answer if the question depends on the user's own
 history or their team's: decisions, conventions, people, customers, earlier
-plans, or meeting notes. Do not search for general programming knowledge or for
-facts you can read in the current repository.
+plans, or meeting notes. Also search at the start of every task, before you
+plan or build: check what is already recorded and what others are already
+doing, and report what overlaps. Do not search for general programming
+knowledge or for facts you can read in the current repository.
+
+Escalate in cost order and stop at the first step that answers: results from
+`search`, `search_entities` and `list_tasks`; then `fetch`, `get_node`,
+`list_edges` and `list_paths`; then the source a result points to (an issue,
+a document, a thread), through your own tools for that system; then ask the
+owner `list_paths` names, or the user.
 
 ## How
 
 1. Find candidates.
    - `search` with a short, specific query: the subject plus the
      distinguishing term ("billing retry policy", "mobile release checklist").
+     Search twice: once for the concept, and once for exact names (PR
+     numbers, services, tables, features). Memories match by meaning only;
+     Vault titles and descriptions also match exact words.
      If `has_more` is true, or results are off-topic, narrow the query instead
      of reading everything. If `memory_search_failed` is true, memories could
      not be searched this time: say so and retry or list instead.
@@ -30,6 +41,9 @@ facts you can read in the current repository.
      It also lists the place's groups.
    - `list_tasks` for tasks: filter by owner (`me` or `any`), status
      (`open`, `overdue`, `all`) and space (`in`).
+   - `search_entities` for the people, teams, customers and projects
+     involved, then `get_node` and `list_edges` for what each owns, knows
+     and belongs to; `list_paths` for how two connect or who knows a subject.
 2. A result gives a title or snippet, not the full text. Before you rely on it,
    call `fetch` with its exact prefixed `id` (`memory:<uuid>`, `vault:<uuid>`
    or `task:<uuid>`). Never invent or edit an id.

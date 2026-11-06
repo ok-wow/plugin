@@ -1,7 +1,7 @@
 ---
 name: setup
 description: Use when the user asks to set up okWOW, get started with okWOW, or bring their team, spaces, people, skills, meetings or agent memory into okWOW (for example "set up okWOW", "/okwow:setup", "move my agent's memory into okWOW", "import my meeting transcripts", "invite my team"). Runs a guided setup in chat that reads what is already there first and only asks about gaps.
-argument-hint: "[people | spaces | knowledge | transcripts | memory | capture | tasks]"
+argument-hint: "[people | spaces | knowledge | transcripts | memory | defaults | capture | tasks]"
 ---
 
 # Set up okWOW
@@ -9,8 +9,8 @@ argument-hint: "[people | spaces | knowledge | transcripts | memory | capture | 
 You run the user's okWOW setup in this chat, through the `okwow` MCP server,
 as the signed-in user. The in-app onboarding already set their profile, their
 agent's name and their plan: do not redo those. If the user named one part
-(people, spaces, knowledge, transcripts, memory, capture, tasks), run that step
-alone.
+(people, spaces, knowledge, transcripts, memory, defaults, capture, tasks), run
+that step alone.
 
 Rules for every step:
 
@@ -108,14 +108,23 @@ Only if the user wants it. Read `references/memory-migration.md` now and
 follow it; it covers where each agent keeps memory, how to propose and save
 each fact, and how to turn local memory off reversibly.
 
-## 7. Session capture
+## 7. Make okWOW the agent's default
+
+Offer this to every user who connected with "Read and write". Read
+`references/agent-instructions.md` now and follow it: it writes a short okWOW
+block into the user's instruction file, after they adjust its terms and
+confirm, so that every session checks okWOW before it works, saves team
+knowledge to okWOW instead of local memory, keeps skills in okWOW and tracks
+work as tasks.
+
+## 8. Session capture
 
 For each repository or folder from step 1 whose sessions should go somewhere
 other than where `get_session_capture` says, follow the `capture` skill's
 "Choose where a folder's sessions go" (one confirmed
 `set_session_capture_rule` per rule).
 
-## 8. A scheduled task check
+## 9. A scheduled task check
 
 Offer this only if the user wants an agent to work through their okWOW tasks
 on a schedule. It needs "Read and write" and an app that runs scheduled or
@@ -149,10 +158,10 @@ which one.
 To change or stop the check later, the user edits or deletes that recurring
 task in their app.
 
-## 9. Recap
+## 10. Recap
 
 Finish with a short recap: what you created, invited, joined, saved, scheduled
-and changed, each with its `url` where a receipt gave one, and what still
+and changed (including the instruction file and its path), each with its `url` where a receipt gave one, and what still
 needs the browser: connecting tools (okWOW → Plugins), creating an
 organization, billing and seats, and granting an agent access to connected
 accounts such as Gmail (okWOW → Settings → Authorized apps → Manage access).

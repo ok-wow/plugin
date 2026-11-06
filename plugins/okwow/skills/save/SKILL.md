@@ -1,14 +1,18 @@
 ---
 name: save
-description: Use whenever the user asks to remember, save, record, note, or write something up in okWOW (for example "remember this in okWOW", "save this to okWOW", "add this to our team knowledge"), or confirms a decision or finding from this session should be kept. Load this before calling create_memory, create_content, prepare_upload, create_task or update_task, and before working on an okWOW task; it covers choosing memory vs artifact vs file, the place and its audience, updates, and safe retries.
+description: Use whenever the user asks to remember, save, record, note, or write something up in okWOW (for example "remember this in okWOW", "save this to okWOW", "add this to our team knowledge"), or when you learn a decision, convention or finding a teammate will need later. Load this before calling create_memory, create_content, prepare_upload, create_task or update_task, and before working on an okWOW task; it covers choosing memory vs artifact vs file, the place and its audience, updates, and safe retries.
 argument-hint: "[what to save]"
 ---
 
 # Save to okWOW
 
 Saves go through the `okwow` MCP server and act as the signed-in user. Members
-of the chosen place can see what you save. Save only what the user asked for or
-confirmed in this session. In private mode (`switch_mode`) saves stay the
+of the chosen place can see what you save. Save what the user asks you to, and
+save on your own when you learn something a teammate will need later: a
+decision, a convention, a gotcha, a reference to an external system. Save it to
+okWOW instead of your local memory, then tell the user what you saved and
+where. If the user's instructions say to offer each fact first, offer it
+instead. In private mode (`switch_mode`) saves stay the
 user's own; in shared mode they reach the place's members.
 
 ## 1. Choose the place

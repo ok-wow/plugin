@@ -6,7 +6,7 @@ The plugin connects to the hosted MCP server at `https://api.okwow.ai/mcp`. Each
 
 An okWOW account is required.
 
-This plugin also includes opt-in session capture for coding agents. It saves coding conversations to okWOW as private chats after the user signs in. Use the capture skill for setup and revocation. Local capture requires Python 3 and a coding agent that runs plugin hooks. The `setup` skill (`/okwow:setup`) walks the user through people, spaces, knowledge, memory, capture and a scheduled task check in chat. The web-compatible distribution includes only recall and save.
+This plugin also includes opt-in session capture for coding agents. It saves coding conversations to okWOW as private chats after the user signs in. Use the capture skill for setup and revocation. Local capture requires Python 3 and a coding agent that runs plugin hooks. The `setup` skill (`/okwow:setup`) walks the user through people, spaces, knowledge, memory, okWOW as the agent's default, capture and a scheduled task check in chat. The web-compatible distribution includes only recall and save.
 
 Install instructions for each app are in the [documentation](https://okwow.ai/docs/okwow-mcp/#install-plugin).
 
