@@ -34,10 +34,8 @@ still has members: a shared-mode save there reaches them, and anyone added
 later. Private mode refuses saves to `org:` and `create_task`; shared mode
 refuses `me`.
 
-`../recall/references/how-okwow-works.md` (in the recall skill) explains
-places, roles, modes and item kinds in full. When a call is refused, read the
-message: it says why and what to do next; `../recall/references/errors.md`
-lists each refusal and the next step.
+How places, roles, modes and item kinds work is explained at
+https://okwow.ai/docs/how-okwow-works/.
 
 ## 1. Choose the place
 
@@ -160,11 +158,4 @@ receipt.
 
 ## Errors
 
-`../recall/references/errors.md` lists every refusal. The common ones:
-
-- A write is refused on a read-only connection: the user approved "Read"
-  access. Ask them to reconnect okWOW with "Read and write".
-- `Connection expired or revoked`: ask the user to reconnect the okwow MCP
-  server in their app.
-- Ids always carry their prefix (`space:`, `org:`, `memory:`, `group:`,
-  `vault:`, `task:`, `upload:`); bare UUIDs are refused.
+A refusal stored nothing and its message says what to do next: follow it.

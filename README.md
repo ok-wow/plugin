@@ -229,7 +229,7 @@ plugins/okwow/
   .mcp.json                       okWOW MCP server: a local relay, signed in as the app
   hooks/hooks.json                session capture hooks, for every app
   scripts/okwow-capture           sign-in, MCP relay and session capture (Python 3, no dependencies)
-  skills/recall/SKILL.md          plus references/ loaded on demand
+  skills/recall/SKILL.md
   skills/save/SKILL.md            plus references/ loaded on demand
   skills/setup/SKILL.md           plus references/ loaded on demand
   skills/capture/SKILL.md

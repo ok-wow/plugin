@@ -47,7 +47,22 @@ To undo it, the user deletes the block, or runs this step again to change it.
 okWOW (the `okwow` MCP server) holds this user's team knowledge: memories,
 Vault items, tasks and the knowledge graph of people and subjects. It takes
 precedence over local notes. Current instructions take precedence over older
-memories.
+memories. How it works, in short (details:
+https://okwow.ai/docs/how-okwow-works/):
+
+- **Places:** the organization (every member sees it), spaces (their members
+  see them) and `me` (only the user). Check a place's audience in
+  `list_spaces` before you save there.
+- **Mode:** this connection is in private or shared mode, and every result
+  says which. Private: saves are the user's alone, and saves in the
+  organization and new tasks are refused. Shared: saves reach the place's
+  members. The mode stays until it is switched; switch only when the user
+  says so.
+- **Refusals:** a refused call stored nothing, and its message says what to
+  do next. Follow it.
+- **Connected accounts:** tools named `<app>_<tool>` act as the user in an
+  account they connected. Confirm with the user before one sends, posts,
+  schedules, changes or deletes anything.
 
 1. **Check okWOW first.** Before you start any task, find out what is already
    recorded and what others are doing:
@@ -83,13 +98,14 @@ memories.
    - Correct a stale memory with `update_memory`; do not add a duplicate.
 4. **Skills live in okWOW.** Save a reusable skill to a space so teammates can
    use it. In private mode the saved skill is the user's own; share it with
-   `update_content` and `in`, then tell the user who can now use it. A local pointer file fetches the okWOW copy each time it runs.
-   To change the skill, `fetch` it and `update_content` it with that
-   `version`; never edit the pointer.
-5. **Track work as okWOW tasks** (creating one needs shared mode). Give each workstream
-   a task, claim it with your session, keep its todos current, ask the user
-   before you block it on a person, and complete it with a report. The okWOW
-   save skill's tasks reference has the details.
+   `update_content` and `in`, then tell the user who can now use it. A local
+   pointer file fetches the okWOW copy each time it runs. To change the skill,
+   `fetch` it and `update_content` it with that `version`; never edit the
+   pointer.
+5. **Track work as okWOW tasks** (creating one needs shared mode). Give each
+   workstream a task, claim it with your session, keep its todos current, ask
+   the user before you block it on a person, and complete it with a report.
+   The okWOW save skill's tasks reference has the details.
 <!-- okwow:end -->
 ```
 

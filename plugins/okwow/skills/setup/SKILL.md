@@ -12,8 +12,9 @@ agent's name and their plan: do not redo those. If the user named one part
 (people, spaces, knowledge, transcripts, memory, defaults, capture, tasks), run
 that step alone.
 
-For places, roles, audiences and connection modes, read the recall skill's
-`references/how-okwow-works.md`; for refusals, its `references/errors.md`.
+How places, roles, audiences and connection modes work is explained at
+https://okwow.ai/docs/how-okwow-works/. A refusal stored nothing and its message says what to do
+next: follow it.
 
 Rules for every step:
 
@@ -181,14 +182,5 @@ Never try to do those yourself.
 
 ## Errors
 
-- A write refused on a read-only connection: ask the user to sign this app in
-  to okWOW again (see the capture skill's Connect section) with "Read and
-  write".
-- A refusal for the user's role: say who can do it (a space or organization
-  admin) and move on.
-- `Connection expired or revoked`, or an okWOW error that names a sign-in
-  step: ask the user to take that step, or to sign this app in to okWOW again
-  (see the capture skill's Connect section), then reconnect the okwow MCP
-  server.
-- Anything else: `../recall/references/errors.md` (in the recall skill) lists each
-  refusal and the next step.
+A refusal stored nothing and its message says what to do next: follow it.
+If the error is about signing in, see the capture skill's Connect section.
