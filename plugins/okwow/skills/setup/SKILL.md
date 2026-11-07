@@ -13,8 +13,8 @@ agent's name and their plan: do not redo those. If the user named one part
 that step alone.
 
 How places, roles, audiences and connection modes work is explained at
-https://okwow.ai/docs/how-okwow-works/. A refusal stored nothing and its message says what to do
-next: follow it.
+https://okwow.ai/docs/how-okwow-works/. A refusal stored nothing and its
+message says what to do next: follow it.
 
 Rules for every step:
 

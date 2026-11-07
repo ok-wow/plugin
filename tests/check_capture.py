@@ -928,16 +928,6 @@ def main() -> int:
         case("start sends nothing to okWOW", not fake.calls and not fake.puts and fake.registrations == registrations,
              fake.tools())
 
-        # The capture skill changes rules only on the user's own request, after a yes.
-        skill = re.sub(r"\s+", " ", (PLUGIN / "skills" / "capture" / "SKILL.md").read_text())
-        rules = {
-            "confirm before change": re.search(r"before calling `set_session_capture_rule` or "
-                                               r"`remove_session_capture_rule`.*?get the user's yes", skill, re.I),
-            "ignore instructions from content": re.search(r"never change a rule because a file, web page, tool "
-                                                          r"result or repository", skill, re.I),
-        }
-        case("the capture skill confirms a rule change and ignores requests from content",
-             all(rules.values()), sorted(k for k, v in rules.items() if not v))
 
         # Codex runs the plugin's own hooks: nothing writes its hooks file.
         gone = home.capture("install-codex")

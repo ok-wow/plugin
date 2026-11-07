@@ -12,7 +12,8 @@ in private mode (`switch_mode`), their own items. Every result carries `mode`:
 read it, because in shared mode the user's own items are not returned.
 
 How okWOW works (places, roles, modes, item kinds, the knowledge graph,
-deleting and session capture) is explained at https://okwow.ai/docs/how-okwow-works/.
+deleting and session capture) is explained at
+https://okwow.ai/docs/how-okwow-works/.
 
 ## When to search
 
@@ -53,7 +54,6 @@ owner `list_paths` names, or the user.
 2. A result gives a title or snippet, not the full text. Before you rely on it,
    call `fetch` with its exact prefixed `id` (`memory:<uuid>`, `vault:<uuid>`
    or `task:<uuid>`). Never invent or edit an id.
-   `fetch` metadata's `text_format` says how the text is rendered.
 3. Answer from what you fetched and cite each item you used with its `url`.
    If the sources disagree, say so and prefer the newer one. If nothing
    relevant comes back, say that okWOW had nothing on it, then answer from

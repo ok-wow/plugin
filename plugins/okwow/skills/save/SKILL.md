@@ -141,13 +141,13 @@ report.
 
 ## 6. Retries
 
-There is no idempotency key. If a create times out or fails without a reason
-("The operation could not complete"), retry the same call with the same place
-and the exact same content: okWOW recognizes content it already holds and
-returns the existing item with `duplicate: true`. Retrying `create_content`
-with the same `upload` returns the item it became. Do not change the text
-between those attempts, or you will create a second copy. A refusal that gives
-a reason stored nothing: fix the call and send it again.
+If a create times out or fails without a reason ("The operation could not
+complete"), retry the same call with the same place and the exact same
+content: okWOW recognizes content it already holds and returns the existing
+item with `duplicate: true`. Retrying `create_content` with the same `upload`
+returns the item it became. Do not change the text between those attempts, or
+you will create a second copy. A refusal that gives a reason stored nothing:
+fix the call and send it again.
 
 ## 7. Report
 
