@@ -45,7 +45,7 @@ To undo it, the user deletes the block, or runs this step again to change it.
 ## okWOW
 
 okWOW (the `okwow` MCP server) holds this user's team knowledge: memories,
-Vault items, tasks and the knowledge graph of people and subjects. It takes
+tasks, the items in its Vault and the knowledge graph of people and subjects. It takes
 precedence over local notes. Current instructions take precedence over older
 memories. How it works, in short (details:
 https://okwow.ai/docs/how-okwow-works/):
@@ -60,8 +60,8 @@ https://okwow.ai/docs/how-okwow-works/):
   says so.
 - **Refusals:** a refused call stored nothing, and its message says what to
   do next. Follow it.
-- **Connected accounts:** tools named `<app>_<tool>` act as the user in an
-  account they connected. Confirm with the user before one sends, posts,
+- **Plugins:** tools named `<app>_<tool>` come from the user's okWOW plugins
+  and act as the user. Confirm with the user before one sends, posts,
   schedules, changes or deletes anything.
 
 1. **Check okWOW first.** Before you start any task, find out what is already

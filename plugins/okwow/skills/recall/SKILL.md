@@ -5,7 +5,7 @@ description: Use at the start of every task, to check what is already recorded a
 
 # Recall from okWOW
 
-okWOW holds the team's memories, vault items (artifacts, files, transcripts, skills) and tasks. The `okwow` MCP server
+okWOW holds the team's memories, tasks and the items in its Vault (artifacts, files, transcripts, skills). The `okwow` MCP server
 reads them as the signed-in user, with exactly the access they have in okWOW:
 the spaces (team areas) they have joined, their organization's memories and,
 in private mode (`switch_mode`), their own items. Every result carries `mode`:
@@ -63,10 +63,10 @@ owner `list_paths` names, or the user.
 If you find a memory that is stale or wrong, tell the user; fixing it is the
 `save` skill's `update_memory`.
 
-## Connected accounts
+## Plugins
 
-The server may also list tools for the user's connected accounts (email,
-chat, calendar, meetings), named `<app>_<tool>`. They act as the user. Read
+The server may also list tools from the user's okWOW plugins (email, chat,
+calendar, meetings), named `<app>_<tool>`. They act as the user. Read
 with them freely, but confirm with the user before any of them sends, posts,
 schedules, changes or deletes anything.
 
