@@ -27,9 +27,8 @@ before you read.
 - Search likely folders (`~/Downloads`, `~/Documents`, `~/Desktop`, and any
   folder the user names) for transcript files: `.vtt`, `.srt`, and `.txt`,
   `.md`, `.docx` or `.pdf` whose name or first lines look like a meeting
-  (speaker labels, timestamps, "transcript", a meeting tool's name). For
-  example `find <folder> -maxdepth 4 -type f \( -iname '*.vtt' -o -iname
-  '*.srt' -o -iname '*transcript*' \) -size -40M`.
+  (speaker labels, timestamps, "transcript", a meeting tool's name), up to
+  40 MB each.
 - Meeting tools save exports in their own folders (Zoom keeps a folder per
   meeting under `~/Documents/Zoom` with caption files). Do not assume a
   path exists: check it.
@@ -83,13 +82,11 @@ one yes for the whole table.
 1. Create any approved new spaces first (`create_space` with the title,
    audience and members agreed).
 2. For each transcript: `prepare_upload` with `in` set to its space, a plain
-   filename and its exact byte size (`wc -c < file`); `PUT` the file's exact
-   bytes with the returned headers; then `create_content` with the `upload`
-   id, `kind: transcript` (always pass it: only `.vtt`/`.srt` and names
-   containing "transcript" are recognized on their own), a title such as
-   `2026-11-03 Acme renewal call`, and `participants` with each person's
-   name, their email when known, and their `speaker_label` when you know
-   which speaker they are.
+   filename and its exact byte size; `PUT` the file's bytes with the returned
+   headers; then `create_content` with the `upload` id, `kind: transcript`, a
+   title such as `2026-11-03 Acme renewal call`, and `participants` with each
+   person's name, their email when known, and their `speaker_label` when you
+   know which speaker they are.
 3. `duplicate: true` means okWOW already had it: count it as skipped, not as
    an error. On a failure, keep going and report it at the end.
 

@@ -29,8 +29,8 @@ Read the notes and turn each durable fact into one okWOW memory proposal:
 - One self-contained fact, third person, absolute dates, at most 1,000
   characters. Merge duplicates; skip what okWOW already holds (`search`
   first).
-- Skip anything stale, temporary task progress, machine paths, ports and
-  harness plumbing that only matters to this computer.
+- Skip anything stale, temporary task progress, and machine paths, ports and
+  agent setup that only matter to this computer.
 - **Never move secrets**: tokens, keys, passwords, connection strings,
   private URLs with credentials. Drop them silently from proposals and tell
   the user how many you skipped and why.
@@ -39,12 +39,13 @@ Read the notes and turn each durable fact into one okWOW memory proposal:
 
 Choose a place for each, from `list_spaces`:
 
-- `me`: personal preferences and working style, for the user alone. `me`
-  appears in private mode; call `switch_mode` with `private` first if it is
-  missing, and tell the user you did.
+- `me`: personal preferences and working style, for the user alone. It needs
+  private mode.
 - A space: team knowledge for that space's members. In private mode a save in
-  a space is still the user's own; switch to `shared` for the team to see it,
-  and say which mode each batch is saved in.
+  a space is still the user's own; the team sees it only in shared mode.
+
+Ask the user before switching modes, and say which mode each batch is saved
+in.
 - The organization (`org:`): company-wide facts.
 
 Show the proposals grouped by place, for example a table of place, group and
