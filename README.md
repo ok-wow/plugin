@@ -15,9 +15,11 @@ connects your agent to the okWOW MCP server and adds four skills:
 - **capture**: checks and changes session capture, which saves your agent
   sessions as okWOW chats (see [Send your sessions to okWOW](#send-your-sessions-to-okwow)).
 
-The agent acts as you, with the access you have in okWOW. You choose "Read",
-"Read and write" or "Manage account" when you connect, and you can revoke a
-connection at any time in okWOW under Settings → Authorized apps.
+The agent acts as you, with the access you have in okWOW. Each app signs in
+once on its own, and that one sign-in covers both its okWOW tools and its
+session capture. You choose "Read", "Read and write" or "Manage account" when
+you connect, and you can revoke an app's connection at any time in okWOW under
+Settings → Authorized apps, where each app has its own row.
 
 ## Releases
 
@@ -35,9 +37,9 @@ claude plugin marketplace add ok-wow/plugin
 claude plugin install okwow@okwow
 ```
 
-Start Claude Code. Your browser opens okWOW once: sign in and approve access.
-The plugin's tools and session capture share this one sign-in. In the session
-that was open while you signed in, run `/mcp` and reconnect
+Start Claude Code. Your browser opens okWOW once: sign in and approve access
+for Claude Code. Its okWOW tools and session capture share this one sign-in.
+In the session that was open while you signed in, run `/mcp` and reconnect
 `plugin:okwow:okwow`; later sessions connect on their own. Session capture
 needs "Read and write".
 
@@ -52,15 +54,14 @@ each session by the project folder Claude Code started it in
 ```bash
 codex plugin marketplace add ok-wow/plugin
 codex plugin add okwow@okwow
-codex mcp login okwow
 ```
 
 `codex plugin marketplace add` also takes a local folder holding this
-repository. `codex mcp login` opens okWOW in your browser to sign in and
-approve access. It is a sign-in of its own for the okWOW tools in Codex:
-Codex does not use the plugin's shared sign-in for its MCP connection, so
-session capture still opens okWOW once on its own. Then ask Codex to run the
-okWOW setup skill.
+repository. Start Codex. Your browser opens okWOW once: sign in and approve
+access for Codex. Its okWOW tools and session capture share this one sign-in;
+there is no separate `codex mcp login`. If the okWOW tools were not available
+while you signed in, start a new session. Then ask Codex to run the okWOW setup
+skill.
 
 Codex runs the plugin's own session capture hooks (`hooks/hooks.json`). It asks
 you once to trust them, and asks again whenever a hook or a script it runs
@@ -74,9 +75,11 @@ file's first line, where Codex started it.
 gemini extensions install https://github.com/ok-wow/plugin
 ```
 
-Then run `/mcp auth okwow` in Gemini CLI. Your browser opens okWOW: sign in and
-approve access. The Gemini extension includes the recall and save skills; it
-does not include setup or session capture.
+The first time Gemini CLI starts the okWOW tools, your browser opens okWOW:
+sign in and approve access for Gemini CLI, then restart Gemini CLI. There is no
+separate `/mcp auth`. The okWOW tools need Python 3. The Gemini extension
+includes the recall and save skills; it does not include setup or session
+capture.
 
 ### Pin a version
 
@@ -84,9 +87,9 @@ To install one release and stay on it, add its tag (the latest is on the
 [releases page](https://github.com/ok-wow/plugin/releases)):
 
 ```bash
-claude plugin marketplace add https://github.com/ok-wow/plugin.git#v0.1.48
-codex plugin marketplace add ok-wow/plugin --ref v0.1.48
-gemini extensions install https://github.com/ok-wow/plugin --ref v0.1.48
+claude plugin marketplace add https://github.com/ok-wow/plugin.git#v0.1.49
+codex plugin marketplace add ok-wow/plugin --ref v0.1.49
+gemini extensions install https://github.com/ok-wow/plugin --ref v0.1.49
 ```
 
 A pinned install does not move until you add the marketplace again with a newer
@@ -101,12 +104,13 @@ processes it like a chat in the app: a title, a summary and the memories it
 learns, which start as yours. A session is sent when it ends or after 30 idle
 minutes; if you resume it, the new turns are added to the same chat.
 
-There is nothing to set up. The first session after you install the plugin
-opens okWOW in your browser once to sign in, the same sign-in the okWOW tools
-use. From then on each session is routed by where it started: its folder, and
-inside git its remote and repository root. With no rules, sessions go to your
-default space ([Choose where sessions go](#choose-where-sessions-go)). Ask
-your agent "are my sessions going to okWOW?" for the current state.
+There is nothing to set up. The first session in each app after you install
+the plugin opens okWOW in your browser once to sign that app in, the same
+sign-in its okWOW tools use. From then on each session is routed by where it
+started: its folder, and inside git its remote and repository root. With no
+rules, sessions go to your default space
+([Choose where sessions go](#choose-where-sessions-go)). Ask your agent "are my
+sessions going to okWOW?" for the current state.
 
 - **Private to you.** A captured session is your chat; other members cannot
   open it.
@@ -123,11 +127,17 @@ your agent "are my sessions going to okWOW?" for the current state.
   messages; a session your rules skip is never read further or sent.
   Repositories are named by their remote, with any credentials in the URL
   left out.
-- **One connection.** The plugin signs in to okWOW once, as "okWOW plugin",
-  and both its MCP tools and session capture use that sign-in. You can revoke
-  it in okWOW under Settings → Authorized apps. On macOS its tokens are kept
-  in your Keychain; elsewhere in a file only you can read. The plugin refuses
-  a token or config file that other users could change.
+- **One connection per app.** Each app signs in to okWOW once, under its own
+  name ("Claude Code", "Codex" or "Gemini CLI"), and both its okWOW tools and
+  its session capture use that sign-in; one app's sign-in, sign-out or
+  revocation leaves the others alone. You can revoke each in okWOW under
+  Settings → Authorized apps. On macOS the tokens are kept in your Keychain;
+  elsewhere in a file only you can read. The plugin refuses a token or config
+  file that other users could change.
+- **Upgrading from one shared sign-in.** Earlier versions signed in once for
+  every app, as "okWOW plugin". The first time an app signs in on its own, the
+  plugin deletes that old sign-in from this machine and asks you to remove
+  "okWOW plugin" in okWOW under Settings → Authorized apps.
 
 Every app runs capture from the plugin's one set of hooks. The hooks name no
 app: capture detects it from the session file's folder and the hook's
@@ -207,9 +217,9 @@ One set of files serves every app:
 .agents/plugins/marketplace.json  marketplace metadata some apps read
 plugins/okwow/
   .claude-plugin/plugin.json      plugin manifest
-  .mcp.json                       okWOW MCP server
+  .mcp.json                       okWOW MCP server: a local relay, signed in as the app
   hooks/hooks.json                session capture hooks, for every app
-  scripts/okwow-capture           session capture client (Python 3, no dependencies)
+  scripts/okwow-capture           sign-in, MCP relay and session capture (Python 3, no dependencies)
   skills/recall/SKILL.md
   skills/save/SKILL.md
   skills/setup/SKILL.md           plus references/ loaded on demand

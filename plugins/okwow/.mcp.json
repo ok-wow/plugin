@@ -1,9 +1,13 @@
 {
   "mcpServers": {
     "okwow": {
-      "type": "http",
-      "url": "${OKWOW_MCP_URL:-https://api.okwow.ai/mcp}",
-      "headersHelper": "python3 -I \"${CLAUDE_PLUGIN_ROOT}/scripts/okwow-capture\" headers"
+      "command": "/bin/sh",
+      "args": [
+        "-c",
+        "if [ -n \"$CLAUDE_PLUGIN_ROOT\" ]; then cd \"$CLAUDE_PLUGIN_ROOT\" && exec python3 -I scripts/okwow-capture mcp --agent claude; else exec python3 -I scripts/okwow-capture mcp --agent codex; fi"
+      ],
+      "cwd": ".",
+      "env_vars": ["OKWOW_MCP_URL"]
     }
   }
 }

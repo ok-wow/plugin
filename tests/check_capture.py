@@ -2,9 +2,9 @@
 """End-to-end check of session capture against a fake okWOW server.
 
 Installs the plugin into a throwaway HOME, then fires its hooks.json commands
-the way each supported app does: a fresh install signs in once on its own, the
-plugin's MCP connection uses that same sign-in through its headersHelper, each
-session is routed by where it started (the start folder, its git remote and its
+the way each supported app does: each app signs in once on its own, as itself,
+the plugin's MCP server (a local relay each app starts) and the app's sessions
+use that app's sign-in and no other app's, each session is routed by where it started (the start folder, its git remote and its
 repository root), and nothing is read past the start or sent when okWOW says
 skip, or when a file, server or endpoint is not one capture trusts. Nothing
 leaves the machine. Writes a JSON report of every case.
@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -72,8 +73,18 @@ class Fake:
         self.has_settings_tool = True
         self.upload_url: Callable[[str], str] = lambda base: f"{base}/upload/1"
         self.calls: list[dict[str, Any]] = []
-        self.registrations = 0
-        self.grants: list[str] = []
+        # Every MCP request: its method, bearer token and Mcp-Session-Id.
+        self.requests: list[dict[str, Any]] = []
+        # Registered clients, by id, with the name each registered under.
+        self.clients: dict[str, str] = {}
+        # Live access tokens, by the client they were issued to.
+        self.tokens: dict[str, str] = {}
+        # Every token grant: its type and the name of the client it was for.
+        self.grants: list[tuple[str, str]] = []
+        self.issued = 0
+        self.refresh_ok = True
+        # Answer MCP requests as an event stream instead of JSON.
+        self.sse = False
         self.puts: list[bytes] = []
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.base = f"http://127.0.0.1:{self.httpd.server_address[1]}"
@@ -81,7 +92,20 @@ class Fake:
 
     def reset(self) -> None:
         self.calls.clear()
+        self.requests.clear()
         self.puts.clear()
+
+    @property
+    def registrations(self) -> int:
+        return len(self.clients)
+
+    def client(self, token: str) -> str:
+        """The name of the client a token was issued to."""
+        return self.clients.get(self.tokens.get(token, ""), "")
+
+    def revoke(self, name: str) -> None:
+        for token in [t for t in self.tokens if self.client(t) == name]:
+            del self.tokens[token]
 
     def tools(self) -> list[str]:
         return [c["name"] for c in self.calls]
@@ -97,6 +121,18 @@ class Fake:
                 data = json.dumps(body).encode() if body is not None else b""
                 self.send_response(status)
                 for k, v in (headers or {"Content-Type": "application/json"}).items():
+                    self.send_header(k, v)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def rpc(self, message_id: Any, result: Any, headers: dict[str, str] | None = None) -> None:
+                message = {"jsonrpc": "2.0", "id": message_id, "result": result}
+                if not fake.sse:
+                    return self.reply(200, message, {"Content-Type": "application/json", **(headers or {})})
+                data = f"event: message\ndata: {json.dumps(message)}\n\n".encode()
+                self.send_response(200)
+                for k, v in {"Content-Type": "text/event-stream", **(headers or {})}.items():
                     self.send_header(k, v)
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
@@ -126,26 +162,43 @@ class Fake:
                 path = urllib.parse.urlsplit(self.path).path
                 raw = self.body()
                 if path == "/register":
-                    fake.registrations += 1
-                    return self.reply(201, {"client_id": f"client-{fake.registrations}"})
+                    client_id = f"client-{fake.registrations + 1}"
+                    fake.clients[client_id] = json.loads(raw).get("client_name", "")
+                    return self.reply(201, {"client_id": client_id})
                 if path == "/token":
-                    fake.grants.append(dict(urllib.parse.parse_qsl(raw.decode())).get("grant_type", ""))
-                    return self.reply(200, {"access_token": "access-1", "refresh_token": "refresh-1", "expires_in": 3600})
+                    fields = dict(urllib.parse.parse_qsl(raw.decode()))
+                    client_id = fields.get("client_id", "")
+                    fake.grants.append((fields.get("grant_type", ""), fake.clients.get(client_id, "")))
+                    if fields.get("grant_type") == "refresh_token" and not fake.refresh_ok:
+                        return self.reply(400, {"error": "invalid_grant"})
+                    fake.issued += 1
+                    token = f"access-{client_id}-{fake.issued}"
+                    fake.tokens[token] = client_id
+                    return self.reply(200, {"access_token": token, "refresh_token": f"refresh-{client_id}",
+                                            "expires_in": 3600})
                 if path != "/mcp":
                     return self.reply(404, {})
-                if self.headers.get("Authorization") != "Bearer access-1":
+                token = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
+                if token not in fake.tokens:
                     return self.reply(401, {})
                 message = json.loads(raw)
+                session = self.headers.get("Mcp-Session-Id")
+                fake.requests.append({"method": message.get("method"), "token": token, "session": session})
                 if "id" not in message:
                     return self.reply(202)
                 if message["method"] == "initialize":
-                    return self.reply(200, {"jsonrpc": "2.0", "id": message["id"], "result": {}}, {
-                        "Content-Type": "application/json", "Mcp-Session-Id": "mcp-1"})
+                    return self.rpc(message["id"], {
+                        "protocolVersion": message["params"].get("protocolVersion"), "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "fake-okwow", "version": "1"}}, {"Mcp-Session-Id": "mcp-1"})
+                if session != "mcp-1":
+                    return self.reply(400, {"jsonrpc": "2.0", "id": message["id"],
+                                            "error": {"code": -32600, "message": "missing Mcp-Session-Id"}})
+                if message["method"] == "tools/list":
+                    return self.rpc(message["id"], {"tools": [{"name": "get_profile", "inputSchema": {"type": "object"}}]})
                 name = message["params"]["name"]
                 arguments = message["params"]["arguments"]
-                fake.calls.append({"name": name, "arguments": arguments})
-                result = self.tool(name, arguments)
-                self.reply(200, {"jsonrpc": "2.0", "id": message["id"], "result": result})
+                fake.calls.append({"name": name, "arguments": arguments, "token": token})
+                self.rpc(message["id"], self.tool(name, arguments))
 
             def tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
                 def ok(data: dict[str, Any]) -> dict[str, Any]:
@@ -188,14 +241,95 @@ class Fake:
         return Handler
 
 
+class Relay:
+    """The plugin's MCP server as an app runs it, spoken to over stdio."""
+
+    def __init__(self, command: list[str], cwd: Path, env: dict[str, str]) -> None:
+        self.process = subprocess.Popen(command, cwd=cwd, env=env, text=True, stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.stdout: list[str] = []
+        self.lines: queue.Queue[str] = queue.Queue()
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
+
+    def _read(self) -> None:
+        for line in self.process.stdout:
+            self.stdout.append(line)
+            self.lines.put(line)
+
+    def send(self, message: dict[str, Any]) -> None:
+        self.process.stdin.write(json.dumps(message) + "\n")
+        self.process.stdin.flush()
+
+    def request(self, message_id: int, method: str, params: dict[str, Any] | None = None) -> Any:
+        """Send a request and return the next line the server writes, parsed."""
+        self.send({"jsonrpc": "2.0", "id": message_id, "method": method, **({"params": params} if params else {})})
+        try:
+            line = self.lines.get(timeout=30)
+        except queue.Empty:
+            return None
+        try:
+            return json.loads(line)
+        except ValueError:
+            return {"not json": line}
+
+    def close(self) -> list[str]:
+        """End the input as the app does when it quits; everything the server wrote."""
+        self.process.stdin.close()
+        try:
+            self.process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+        self.reader.join(5)
+        return self.stdout
+
+
+INITIALIZE = {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "check", "version": "1"}}
+
+
+def round_trip(relay: Relay) -> dict[str, Any]:
+    """What an app sends first: initialize, the initialized notification, tools/list, then a tool call."""
+    replies = {"initialize": relay.request(1, "initialize", INITIALIZE)}
+    relay.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    replies["tools/list"] = relay.request(2, "tools/list")
+    replies["tools/call"] = relay.request(3, "tools/call", {"name": "get_profile", "arguments": {}})
+    replies["stdout"] = relay.close()
+    return replies
+
+
+def round_trip_error(fake: Fake, replies: dict[str, Any], agent: str) -> str:
+    """Why a round trip did not go through the fake as `agent`; empty when it did."""
+    if (replies["initialize"] or {}).get("id") != 1 or "result" not in (replies["initialize"] or {}):
+        return f"initialize: {replies['initialize']}"
+    if [t["name"] for t in ((replies["tools/list"] or {}).get("result") or {}).get("tools", [])] != ["get_profile"]:
+        return f"tools/list: {replies['tools/list']}"
+    result = (replies["tools/call"] or {}).get("result") or {}
+    if (replies["tools/call"] or {}).get("id") != 3 or (result.get("structuredContent") or {}).get("user", {}).get(
+            "email") != "pat@example.com":
+        return f"tools/call: {replies['tools/call']}"
+    # The notification is answered by nothing: one line per request, each JSON-RPC.
+    if len(replies["stdout"]) != 3:
+        return f"stdout: {replies['stdout']}"
+    methods = [r["method"] for r in fake.requests]
+    if methods != ["initialize", "notifications/initialized", "tools/list", "tools/call"]:
+        return f"requests: {methods}"
+    if [r["session"] for r in fake.requests] != [None, "mcp-1", "mcp-1", "mcp-1"]:
+        return f"Mcp-Session-Id: {[r['session'] for r in fake.requests]}"
+    if {fake.client(r["token"]) for r in fake.requests} != {agent}:
+        return f"signed in as {sorted({fake.client(r['token']) for r in fake.requests})}"
+    return ""
+
+
 class Home:
     """A throwaway HOME with the plugin installed and a browser that consents."""
 
     def __init__(self, fake: Fake) -> None:
         self.dir = Path(tempfile.mkdtemp(prefix="okwow-capture-e2e-"))
-        self.plugin = self.dir / "plugin"
+        # The repository layout: Gemini CLI installs it whole, the other apps its plugin folder.
+        self.ext = self.dir / "ext"
+        self.plugin = self.ext / "plugins" / "okwow"
         shutil.copytree(PLUGIN, self.plugin)
-        # The shipped .mcp.json, pointed at the fake the way a developer points it at another server.
+        shutil.copy(ROOT / "gemini-extension.json", self.ext)
         self.server = json.loads((self.plugin / ".mcp.json").read_text())["mcpServers"]["okwow"]
         self.url = f"{fake.base}/mcp"
         browser = self.dir / "browser"
@@ -282,16 +416,26 @@ class Home:
         return subprocess.run(["/bin/sh", "-c", command], input=json.dumps(payload), text=True,
                               capture_output=True, env={**self.env, **app_env, **(extra_env or {})}, timeout=15)
 
-    def headers(self) -> dict[str, Any]:
-        """Run the MCP server's headersHelper as Claude Code does: in a shell, from the plugin root."""
-        command = self.server["headersHelper"].replace("${CLAUDE_PLUGIN_ROOT}", str(self.plugin))
-        done = subprocess.run(["/bin/sh", "-c", command], text=True, capture_output=True, cwd=self.plugin,
-                              env={**self.env, "CLAUDE_CODE_MCP_SERVER_NAME": "okwow",
-                                   "CLAUDE_CODE_MCP_SERVER_URL": self.url}, timeout=10)
-        try:
-            return {"exit": done.returncode, "headers": json.loads(done.stdout)}
-        except ValueError:
-            return {"exit": done.returncode, "stdout": done.stdout, "stderr": done.stderr}
+    def relay(self, app: str) -> Relay:
+        """Start the okWOW MCP server the way each app starts it. Claude Code expands
+        ${CLAUDE_PLUGIN_ROOT}, names the plugin folder in the server's environment and
+        runs it in the project folder. Codex 0.139 expands nothing, runs it in `cwd`
+        under the plugin folder, and passes only a few variables of its own plus those
+        named in `env_vars`. Gemini CLI expands ${extensionPath}."""
+        if app == "gemini":
+            server = json.loads((self.ext / "gemini-extension.json").read_text())["mcpServers"]["okwow"]
+            args = [a.replace("${extensionPath}", str(self.ext)) for a in server["args"]]
+            return Relay([server["command"], *args], self.dir, self.env)
+        server = self.server
+        if app == "claude":
+            args = [a.replace("${CLAUDE_PLUGIN_ROOT}", str(self.plugin)) for a in server["args"]]
+            return Relay([server["command"], *args], self.dir,
+                         {**self.env, "CLAUDE_PLUGIN_ROOT": str(self.plugin), "CLAUDE_CODE_ENTRYPOINT": "cli"})
+        env = {k: self.env[k] for k in ("HOME", "PATH", *server.get("env_vars", [])) if k in self.env}
+        # For the test only: no real Keychain, and the browser that consents.
+        env.update({k: self.env[k] for k in ("OKWOW_CAPTURE_KEYCHAIN", "BROWSER")})
+        cwd = self.plugin / server["cwd"] if "cwd" in server else self.dir
+        return Relay([server["command"], *server["args"]], cwd, env)
 
     def capture(self, *args: str, env: dict[str, str] | None = None,
                 cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -310,8 +454,8 @@ class Home:
         path = self.dir / ".local" / "state" / "okwow" / "capture.log"
         return path.read_text() if path.exists() else ""
 
-    def token(self) -> Path:
-        return self.config / "capture-token.json"
+    def token(self, agent: str = "claude") -> Path:
+        return self.config / f"capture-token-{agent}.json"
 
     def stop(self) -> None:
         subprocess.run(["pkill", "-f", str(self.plugin)], check=False)
@@ -381,42 +525,54 @@ def main() -> int:
         settle(1)
         case("not signed in: a turn starts nothing and sends nothing",
              not home.token().exists() and fake.registrations == 0 and not fake.calls)
-        # A new session connects the MCP server and fires SessionStart at about the same time.
-        first = home.headers()
-        case("before sign-in the MCP helper prints no credential", first == {"exit": 0, "headers": {}}, first)
+        # A new session starts the MCP server and fires SessionStart at about the same time.
+        first = home.relay("claude")
+        refused = first.request(1, "initialize", INITIALIZE) or {}
+        lines = first.close()
+        case("before sign-in the MCP server answers with an error naming the sign-in step, and writes nothing else",
+             refused.get("id") == 1 and "sign in" in (refused.get("error") or {}).get("message", "").lower()
+             and len(lines) == 1, lines)
         home.fire("SessionStart", "s0", "", app)
         signed_in = wait(lambda: home.token().exists() and "get_session_capture" in fake.tools())
         case("the first session signs in through the browser on its own", signed_in, home.log())
         settle(1)
-        case("the MCP connection and capture open one sign-in between them", fake.registrations == 1,
-             fake.registrations)
-        shared = home.headers()
-        case("the MCP connection uses capture's sign-in",
-             shared.get("headers") == {"Authorization": "Bearer access-1"}, shared)
+        case("the MCP server and capture open one sign-in between them, named after the app",
+             list(fake.clients.values()) == ["Claude Code"], fake.clients)
+        fake.reset()
+        shared = round_trip(home.relay("claude"))
+        case("Claude Code's okWOW tools go through the relay with Claude Code's sign-in",
+             not round_trip_error(fake, shared, "Claude Code"), round_trip_error(fake, shared, "Claude Code"))
         saved = json.loads(home.token().read_text())
         home.token().write_text(json.dumps({**saved, "expires_at": 0}))
         fake.grants.clear()
-        refreshed = home.headers()
-        case("an expired sign-in is refreshed, never handed to the MCP connection stale",
-             fake.grants == ["refresh_token"] and refreshed.get("headers") == {"Authorization": "Bearer access-1"},
-             {"grants": fake.grants, "helper": refreshed})
+        relay = home.relay("claude")
+        refreshed = relay.request(1, "initialize", INITIALIZE) or {}
+        relay.close()
+        case("an expired sign-in is refreshed, never sent stale",
+             fake.grants == [("refresh_token", "Claude Code")] and "result" in refreshed,
+             {"grants": fake.grants, "reply": refreshed})
         saved = json.loads(home.token().read_text())
         home.token().write_text(json.dumps({**saved, "server": "http://127.0.0.1:1/mcp"}))
-        other = home.headers()
+        fake.reset()
+        relay = home.relay("claude")
+        other = relay.request(1, "initialize", INITIALIZE) or {}
+        relay.close()
         home.token().write_text(json.dumps(saved))
-        case("a sign-in for another server is not handed to the MCP connection", other.get("headers") == {}, other)
+        case("a sign-in for another server is never sent", "error" in other and not fake.requests, other)
         mode = oct(home.token().stat().st_mode & 0o777) if home.token().exists() else None
         case("the token file is private", mode == "0o600", mode)
         before = fake.registrations
-        home.capture("logout")
+        home.capture("logout", "--agent", "claude")
         home.fire("SessionStart", "s0", "", app)
         settle(2)
-        signed_out = home.headers()
+        relay = home.relay("claude")
+        signed_out = relay.request(1, "initialize", INITIALIZE) or {}
+        relay.close()
         settle(2)
         case("after declining or signing out, nothing opens sign-in again",
-             fake.registrations == before and not home.token().exists() and signed_out.get("headers") == {},
-             {"registrations": fake.registrations, "helper": signed_out})
-        done = home.capture("login")
+             fake.registrations == before and not home.token().exists() and "error" in signed_out,
+             {"registrations": fake.registrations, "reply": signed_out})
+        done = home.capture("login", "--agent", "claude")
         case("signing in again by hand works and names the destination",
              done.returncode == 0 and SPACE["label"] in done.stdout and home.token().exists(),
              done.stdout + done.stderr)
@@ -508,6 +664,89 @@ def main() -> int:
         wait(lambda: "create_content" in fake.tools())
         start = call(fake, "create_content").get("session", {}).get("start")
         case("a folder outside git sends its folder only", start == {"folder": real(plain)}, start)
+
+        # Codex signs in on its own, as itself, at its first session. The sign-in
+        # every app once shared, as "okWOW plugin", is removed then.
+        legacy = home.config / "capture-token.json"
+        legacy.write_text(json.dumps({"server": home.url, "client_id": "client-0", "store": "file",
+                                      "access_token": "legacy-access", "refresh_token": "legacy-refresh"}))
+        legacy.chmod(0o600)
+        claude_token = home.token().read_text()
+        fake.grants.clear()
+        home.fire("SessionStart", "c0", home.codex_session("c0", app), app, app="codex")
+        codex_signed_in = wait(lambda: home.token("codex").exists() and "get_session_capture" in fake.tools())
+        settle(1)
+        case("Codex's first session signs it in as Codex, alongside Claude Code",
+             codex_signed_in and sorted(set(fake.clients.values())) == ["Claude Code", "Codex"]
+             and list(fake.clients.values())[-1] == "Codex", fake.clients)
+        case("Codex's sign-in leaves Claude Code's sign-in as it was",
+             home.token().read_text() == claude_token and all(c != "Claude Code" for _, c in fake.grants),
+             fake.grants)
+        case("the shared sign-in from before is removed after an app's first sign-in, and the user told to revoke it",
+             not legacy.exists() and "okWOW plugin" in home.log(), home.log()[-600:])
+
+        # Each app's sessions upload with that app's sign-in.
+        fake.reset()
+        home.fire("SessionEnd", "s1c", home.session("s1c", app), app)
+        wait(lambda: "create_content" in fake.tools())
+        home.fire("SessionEnd", "c1c", home.codex_session("c1c", app), app, app="codex")
+        wait(lambda: fake.tools().count("create_content") == 2)
+        signed = {c["arguments"]["session"]["id"]: fake.client(c["token"]) for c in fake.calls
+                  if c["name"] == "create_content"}
+        case("a Claude Code session uploads as Claude Code and a Codex session as Codex",
+             signed == {"s1c": "Claude Code", "c1c": "Codex"}, signed)
+
+        # Each app's okWOW tools go through the relay with that app's own sign-in,
+        # answered as JSON or as an event stream.
+        for sse in (False, True):
+            fake.sse = sse
+            for agent, name in (("claude", "Claude Code"), ("codex", "Codex")):
+                fake.reset()
+                replies = round_trip(home.relay(agent))
+                case(f"the relay round-trips {name}'s tool calls as {name}"
+                     f" ({'event stream' if sse else 'JSON'})",
+                     not round_trip_error(fake, replies, name), round_trip_error(fake, replies, name))
+        fake.sse = False
+
+        # A token okWOW no longer takes: refreshed, then retried once.
+        fake.reset()
+        fake.grants.clear()
+        fake.revoke("Codex")
+        replies = round_trip(home.relay("codex"))
+        case("on a 401 the relay refreshes the app's sign-in and retries",
+             not round_trip_error(fake, replies, "Codex") and fake.grants == [("refresh_token", "Codex")],
+             {"grants": fake.grants, "error": round_trip_error(fake, replies, "Codex")})
+        # Refused as well: an error, and the other app's sign-in untouched.
+        fake.refresh_ok = False
+        fake.revoke("Codex")
+        fake.grants.clear()
+        relay = home.relay("codex")
+        refused = relay.request(1, "initialize", INITIALIZE) or {}
+        lines = relay.close()
+        fake.refresh_ok = True
+        fake.reset()
+        still = round_trip(home.relay("claude"))
+        case("when the refresh is refused the relay answers with an error, and Claude Code's sign-in still works",
+             refused.get("id") == 1 and "error" in refused and len(lines) == 1
+             and home.token().read_text() == claude_token and not round_trip_error(fake, still, "Claude Code")
+             and all(c != "Claude Code" for _, c in fake.grants),
+             {"reply": refused, "grants": fake.grants, "claude": round_trip_error(fake, still, "Claude Code")})
+        home.capture("login", "--agent", "codex")
+
+        # Gemini CLI runs only the relay: its first use opens its own sign-in.
+        relay = home.relay("gemini")
+        refused = relay.request(1, "initialize", INITIALIZE) or {}
+        lines = relay.close()
+        case("Gemini CLI before its sign-in gets an error naming the sign-in step, and nothing else",
+             refused.get("id") == 1 and "sign in" in (refused.get("error") or {}).get("message", "").lower()
+             and len(lines) == 1, lines)
+        gemini_signed_in = wait(lambda: "Gemini CLI" in fake.clients.values() and home.token("gemini").exists())
+        settle(1)
+        fake.reset()
+        replies = round_trip(home.relay("gemini"))
+        case("after signing in, Gemini CLI's tools go through as Gemini CLI",
+             gemini_signed_in and not round_trip_error(fake, replies, "Gemini CLI"),
+             {"clients": fake.clients, "error": round_trip_error(fake, replies, "Gemini CLI")})
 
         # Codex: the start comes from the session file's session_meta, not from the
         # hook's cwd or a project folder inherited from another app's environment.

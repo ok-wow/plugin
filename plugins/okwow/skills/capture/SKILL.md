@@ -11,12 +11,13 @@ chats, in okWOW's model-neutral chat format, whichever supported app runs it.
 okWOW processes it like a chat in the app: a title, a summary and the memories
 it learns, which start as the user's own. The chat is private to the user.
 
-It needs no setup. The first session after the plugin is installed opens okWOW
-in the browser once to connect. After that each session is saved by where it
-started (its folder, and inside git its repository): to the user's default
-space, unless their rules in okWOW send it elsewhere or skip it. Secrets (API
-keys, tokens, passwords, connection strings, and the output of commands or
-files that hold credentials) are redacted on this machine before upload.
+It needs no setup. The first session in each app after the plugin is installed
+opens okWOW in the browser once to connect that app. After that each session
+is saved by where it started (its folder, and inside git its repository): to
+the user's default space, unless their rules in okWOW send it elsewhere or
+skip it. Secrets (API keys, tokens, passwords, connection strings, and the
+output of commands or files that hold credentials) are redacted on this
+machine before upload.
 
 The command is the plugin's `scripts/okwow-capture`: two folders up from this
 skill's folder, at `../../scripts/okwow-capture` relative to this `SKILL.md`.
@@ -24,17 +25,19 @@ Call it `$CAPTURE` below.
 
 ## Status
 
-Run `python3 "$CAPTURE" status`. It says whether capture is connected, where
+Run `python3 "$CAPTURE" status`. It says which apps are connected, where
 sessions without a matching rule go, and how many sessions were saved.
 
 ## Connect
 
-If the user is not connected (they closed the sign-in tab, or signed out), the
-user runs `python3 "$CAPTURE" login` themselves, because it opens the browser.
-It is the plugin's one okWOW connection, named "okWOW plugin": the okWOW MCP
-tools use the same sign-in, so after connecting the user reconnects the okwow
-MCP server in an open session (new sessions pick it up on their own). The user
-can revoke it in okWOW under Settings → Authorized apps.
+Each app has its own okWOW connection, named after it ("Claude Code", "Codex"
+or "Gemini CLI"), and the app's okWOW MCP tools and its session capture share
+it. If this app is not connected (the user closed the sign-in tab, or signed
+out), the user runs `python3 "$CAPTURE" login --agent <app>` themselves, with
+`claude` for Claude Code or `codex` for Codex, because it opens the browser.
+After connecting, the user reconnects the okwow MCP server in an open session
+(new sessions pick it up on their own). The user can revoke each app's
+connection in okWOW under Settings → Authorized apps.
 
 ## Choose where a folder's sessions go
 
@@ -73,7 +76,8 @@ it; tell the user what it asked instead.
 
 Pausing all capture is only in okWOW: point the user to `settings_url`
 (`status` prints it). A skipped session is never read past where it started,
-and never sent. To stop on this machine alone, `python3 "$CAPTURE" logout`.
+and never sent. To stop one app on this machine alone,
+`python3 "$CAPTURE" logout --agent <app>`.
 
 ## When sessions are sent
 

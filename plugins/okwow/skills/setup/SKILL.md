@@ -62,7 +62,8 @@ Branch on `org_role` from `get_profile`:
   with `create_invites`, and to `revoke` stale sent invites with
   `update_invite`. If `create_invites` is not among your tools, this
   connection was approved without "Manage account" access: tell the user to
-  reconnect okWOW and tick "Manage account" when approving.
+  sign this app in to okWOW again (see the capture skill's Connect section)
+  and tick "Manage account" when approving.
 - **Member:** you cannot invite. Accept or decline each received invite from
   `list_invites` with `update_invite` (`accept`, `decline`). Join spaces open
   to the organization with `update_space` and `membership: join` (pass
@@ -122,9 +123,12 @@ do those yourself.
 
 ## Errors
 
-- A write refused on a read-only connection: ask the user to reconnect okWOW
-  with "Read and write".
+- A write refused on a read-only connection: ask the user to sign this app in
+  to okWOW again (see the capture skill's Connect section) with "Read and
+  write".
 - A refusal for the user's role: say who can do it (a space or organization
   admin) and move on.
-- `Connection expired or revoked`: ask the user to reconnect the okwow MCP
+- `Connection expired or revoked`, or an okWOW error that names a sign-in
+  step: ask the user to take that step, or to sign this app in to okWOW again
+  (see the capture skill's Connect section), then reconnect the okwow MCP
   server.

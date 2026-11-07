@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """okwow-capture: send coding agent sessions to okWOW as chats.
 
-The first session after the plugin is installed opens okWOW once to sign in.
-From then on every session is uploaded through the okWOW MCP server once it
+Each app signs in on its own: its first session opens okWOW once to sign that
+app in, under the app's name, and the app's okWOW tools (`mcp`, a local relay to
+the okWOW MCP server) and its session capture share that sign-in. From then on
+every session is uploaded through the okWOW MCP server once it
 ends or has been idle for a while, unless the user's rules in okWOW (Settings →
 Authorized apps) skip sessions started where it started, or pause capture.
 The app running the session is detected, not configured: see APPS. okWOW keeps
@@ -43,8 +45,10 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Optional
 
 PRODUCTION_SERVER = "https://api.okwow.ai/mcp"
-# One sign-in for the plugin: its MCP tools and session capture.
-CLIENT_NAME = "okWOW plugin"
+# One sign-in per app, named after it, for its okWOW tools and its session capture.
+AGENTS = {"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini CLI"}
+# The one sign-in every app once shared; removed once an app signs in on its own.
+LEGACY_CLIENT_NAME = "okWOW plugin"
 PROTOCOL_VERSION = "2025-06-18"
 DEFAULT_IDLE_MINUTES = 30
 # A sweep for one ended session waits this long for a running sweep. It runs
@@ -65,15 +69,12 @@ LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 CONFIG_DIR = Path(os.environ.get("OKWOW_CAPTURE_HOME") or Path.home() / ".config" / "okwow")
 STATE_DIR = Path(os.environ.get("OKWOW_CAPTURE_STATE") or Path.home() / ".local" / "state" / "okwow")
 CONFIG_FILE = CONFIG_DIR / "capture.json"
-# Holds the connection; with the Keychain, its tokens live there instead.
-TOKEN_FILE = CONFIG_DIR / "capture-token.json"
-# Sign-in opens on its own once; this records that it did.
-ASKED_FILE = CONFIG_DIR / "capture-asked"
+LEGACY_TOKEN_FILE = CONFIG_DIR / "capture-token.json"
+LEGACY_ASKED_FILE = CONFIG_DIR / "capture-asked"
 STATE_FILE = STATE_DIR / "capture-state.json"
 LOCK_FILE = STATE_DIR / "capture.lock"
 SWEEP_LOCK_FILE = STATE_DIR / "capture-sweep.lock"
 LOG_FILE = STATE_DIR / "capture.log"
-KEYCHAIN_SERVICE = CLIENT_NAME
 SECRET_FIELDS = ("access_token", "refresh_token", "expires_at")
 
 
@@ -158,14 +159,8 @@ def config() -> dict[str, Any]:
 
 
 def plugin_server() -> str:
-    """The okWOW server the plugin's own MCP connection uses: its .mcp.json URL,
-    with ${VAR:-default} expanded the way the app expands it (OKWOW_MCP_URL)."""
-    mcp = Path(os.path.abspath(__file__)).parent.parent / ".mcp.json"
-    try:
-        url = json.loads(mcp.read_text())["mcpServers"]["okwow"]["url"]
-    except (OSError, ValueError, KeyError, TypeError):
-        return PRODUCTION_SERVER
-    return re.sub(r"\$\{(\w+)(?::-([^}]*))?\}", lambda m: os.environ.get(m[1]) or m[2] or "", url)
+    """The okWOW server the plugin's MCP relay talks to: OKWOW_MCP_URL, else production."""
+    return os.environ.get("OKWOW_MCP_URL") or PRODUCTION_SERVER
 
 
 def server() -> str:
@@ -236,6 +231,20 @@ def post_form(url: str, fields: dict[str, str]) -> dict[str, Any]:
 # --- tokens ------------------------------------------------------------------
 
 
+def token_file(agent: str) -> Path:
+    """Holds the app's connection; with the Keychain, its tokens live there instead."""
+    return CONFIG_DIR / f"capture-token-{agent}.json"
+
+
+def asked_file(agent: str) -> Path:
+    """Sign-in opens on its own once per app; this records that it did."""
+    return CONFIG_DIR / f"capture-asked-{agent}"
+
+
+def keychain_service(agent: str) -> str:
+    return f"okWOW {AGENTS[agent]}"
+
+
 def use_keychain() -> bool:
     return sys.platform == "darwin" and os.environ.get("OKWOW_CAPTURE_KEYCHAIN") != "0" and bool(shutil.which("security"))
 
@@ -244,17 +253,17 @@ def security(*args: str, stdin: Optional[str] = None) -> subprocess.CompletedPro
     return subprocess.run(["security", *args], input=stdin, text=True, capture_output=True, timeout=15, check=False)
 
 
-def keychain_write(account: str, secret: dict[str, Any]) -> None:
+def keychain_write(service: str, account: str, secret: dict[str, Any]) -> None:
     blob = base64.b64encode(json.dumps(secret).encode()).decode()
     # Through stdin, so the tokens never appear in a process listing.
-    command = f'add-generic-password -U -s "{KEYCHAIN_SERVICE}" -a "{account}" -w "{blob}"\n'
+    command = f'add-generic-password -U -s "{service}" -a "{account}" -w "{blob}"\n'
     security("-i", stdin=command)
-    if keychain_read(account) != secret:
+    if keychain_read(service, account) != secret:
         raise CaptureError("Could not save the okWOW sign-in to the Keychain")
 
 
-def keychain_read(account: str) -> dict[str, Any]:
-    found = security("find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w")
+def keychain_read(service: str, account: str) -> dict[str, Any]:
+    found = security("find-generic-password", "-s", service, "-a", account, "-w")
     if found.returncode != 0:
         return {}
     try:
@@ -263,15 +272,15 @@ def keychain_read(account: str) -> dict[str, Any]:
         return {}
 
 
-def connection() -> dict[str, Any]:
-    """The saved connection with its tokens, wherever they are kept."""
-    saved = read_json(TOKEN_FILE, {}, private=True)
+def connection(agent: str) -> dict[str, Any]:
+    """The app's saved connection with its tokens, wherever they are kept."""
+    saved = read_json(token_file(agent), {}, private=True)
     if saved.get("store") == "keychain":
-        saved.update(keychain_read(saved.get("server", "")))
+        saved.update(keychain_read(keychain_service(agent), saved.get("server", "")))
     return saved
 
 
-def store_tokens(saved: dict[str, Any], tokens: dict[str, Any]) -> None:
+def store_tokens(agent: str, saved: dict[str, Any], tokens: dict[str, Any]) -> None:
     secret = {
         "access_token": tokens["access_token"],
         "refresh_token": tokens.get("refresh_token") or saved.get("refresh_token"),
@@ -279,27 +288,30 @@ def store_tokens(saved: dict[str, Any], tokens: dict[str, Any]) -> None:
     }
     meta = {k: v for k, v in saved.items() if k not in SECRET_FIELDS}
     if use_keychain():
-        keychain_write(meta["server"], secret)
+        keychain_write(keychain_service(agent), meta["server"], secret)
         meta["store"] = "keychain"
-        write_json(TOKEN_FILE, meta, private=True)
+        write_json(token_file(agent), meta, private=True)
     else:
         meta["store"] = "file"
-        write_json(TOKEN_FILE, {**meta, **secret}, private=True)
+        write_json(token_file(agent), {**meta, **secret}, private=True)
     saved.update(secret)
 
 
-def access_token(force_refresh: bool = False) -> str:
-    saved = connection()
+def sign_in_step(agent: str) -> str:
+    return f"sign in with `okwow-capture login --agent {agent}`"
+
+
+def access_token(agent: str, url: str, force_refresh: bool = False) -> str:
+    saved = connection(agent)
     if not saved.get("access_token"):
-        raise CaptureError("Not signed in; run `okwow-capture login`")
-    if saved.get("server") != server():
-        raise CaptureError("The okWOW sign-in is for another server; run `okwow-capture login`")
+        raise CaptureError(f"{AGENTS[agent]} is not signed in to okWOW; {sign_in_step(agent)}")
+    if saved.get("server") != url:
+        raise CaptureError(f"{AGENTS[agent]}'s okWOW sign-in is for another server; {sign_in_step(agent)}")
     if force_refresh or time.time() >= saved.get("expires_at", 0):
         if not saved.get("refresh_token"):
-            raise CaptureError("The okWOW sign-in expired; run `okwow-capture login`")
-        store_tokens(
-            saved,
-            post_form(
+            raise CaptureError(f"{AGENTS[agent]}'s okWOW sign-in expired; {sign_in_step(agent)}")
+        try:
+            tokens = post_form(
                 saved["token_endpoint"],
                 {
                     "grant_type": "refresh_token",
@@ -307,9 +319,30 @@ def access_token(force_refresh: bool = False) -> str:
                     "client_id": saved["client_id"],
                     "resource": saved["resource"],
                 },
-            ),
-        )
+            )
+        except CaptureError as error:
+            raise CaptureError(f"{AGENTS[agent]}'s okWOW sign-in could not be renewed ({error}); "
+                               f"{sign_in_step(agent)}") from error
+        store_tokens(agent, saved, tokens)
     return saved["access_token"]
+
+
+def forget_legacy() -> bool:
+    """Remove the sign-in every app once shared; True when there was one."""
+    if not LEGACY_TOKEN_FILE.exists():
+        return False
+    with contextlib.suppress(OSError, ValueError):
+        saved = json.loads(LEGACY_TOKEN_FILE.read_text())
+        if saved.get("store") == "keychain":
+            security("delete-generic-password", "-s", LEGACY_CLIENT_NAME, "-a", str(saved.get("server", "")))
+    for path in (LEGACY_TOKEN_FILE, LEGACY_ASKED_FILE):
+        with contextlib.suppress(FileNotFoundError):
+            path.unlink()
+    return True
+
+
+LEGACY_NOTICE = (f'The okWOW plugin no longer uses its old shared sign-in: remove "{LEGACY_CLIENT_NAME}" '
+                 "in okWOW under Settings → Authorized apps.")
 
 
 # --- oauth -------------------------------------------------------------------
@@ -337,12 +370,12 @@ PAGE = """<!doctype html><meta charset="utf-8"><title>okWOW</title>
 <h1 style="font-size:1.4rem">{heading}</h1><p>{body}</p>"""
 
 
-def login(url: str) -> dict[str, Any]:
-    """Sign in through the browser, for the MCP tools and capture; returns the capture settings."""
+def login(url: str, agent: str) -> dict[str, Any]:
+    """Sign the app in through the browser, for its okWOW tools and capture; returns the capture settings."""
     url = checked_server(url)
     found = discover(url)
     metadata = found["metadata"]
-    saved = read_json(TOKEN_FILE, {}, private=True)
+    saved = read_json(token_file(agent), {}, private=True)
     if saved.get("server") == url and saved.get("client_id") and saved.get("port"):
         client_id, port = saved["client_id"], saved["port"]
     else:
@@ -352,7 +385,7 @@ def login(url: str) -> dict[str, Any]:
             metadata["registration_endpoint"],
             json.dumps(
                 {
-                    "client_name": CLIENT_NAME,
+                    "client_name": AGENTS[agent],
                     "redirect_uris": [f"http://127.0.0.1:{port}/callback"],
                     "grant_types": ["authorization_code", "refresh_token"],
                     "response_types": ["code"],
@@ -401,14 +434,15 @@ def login(url: str) -> dict[str, Any]:
             "client_id": client_id,
             "port": port,
         }
-        store_tokens(connection_, tokens)
-        mcp = MCP(url)
+        store_tokens(agent, connection_, tokens)
+        mcp = MCP(url, agent)
         profile = mcp.call("get_profile", {})
         user = profile.get("user") or profile
-        meta = read_json(TOKEN_FILE, {}, private=True)
+        meta = read_json(token_file(agent), {}, private=True)
         meta["profile"] = {"name": user.get("name") or user.get("display_name"), "email": user.get("email")}
-        write_json(TOKEN_FILE, meta, private=True)
-        return {"email": meta["profile"]["email"], "settings": mcp.call("get_session_capture", {})}
+        write_json(token_file(agent), meta, private=True)
+        return {"email": meta["profile"]["email"], "settings": mcp.call("get_session_capture", {}),
+                "legacy": forget_legacy()}
 
     class Callback(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -425,7 +459,10 @@ def login(url: str) -> dict[str, Any]:
             else:
                 try:
                     outcome.update(finish(query["code"]))
-                    heading, body = "You're connected to okWOW", describe(outcome["settings"], html=True)
+                    heading = f"{AGENTS[agent]} is connected to okWOW"
+                    body = describe(outcome["settings"], html=True)
+                    if outcome["legacy"]:
+                        body += " " + html_escape(LEGACY_NOTICE)
                 except Exception as error:  # noqa: BLE001 — shown on the page, not lost in a reset
                     outcome["error"] = str(error) if isinstance(error, CaptureError) else f"{type(error).__name__}: {error}"
                     heading, body = "Sign-in did not finish", html_escape(str(error))
@@ -478,51 +515,65 @@ def describe(settings: dict[str, Any], html: bool = False) -> str:
 
 
 class MCP:
-    """A minimal Streamable HTTP MCP client for tool calls."""
+    """A minimal Streamable HTTP MCP client, signed in as one app."""
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, agent: str, connect: bool = True) -> None:
         self.server = checked_server(url)
+        self.agent = agent
         self.session: Optional[str] = None
+        self.protocol = PROTOCOL_VERSION
         self.next_id = 0
-        self._send("initialize", {
-            "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {},
-            "clientInfo": {"name": "okwow-capture", "version": "0.1.48"},
-        })
-        self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        # The relay posts from several threads; one of them renews the sign-in at a time.
+        self.lock = threading.Lock()
+        if connect:
+            self._send("initialize", {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "okwow-capture", "version": "0.1.49"},
+            })
+            self.post({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
-    def _post(self, message: dict[str, Any], retry: bool = True) -> tuple[dict[str, str], bytes]:
+    def post(self, message: Any, retry: bool = True) -> list[dict[str, Any]]:
+        """Send one JSON-RPC message; the messages okWOW answers with, from JSON or an event stream."""
+        with self.lock:
+            token = access_token(self.agent, self.server)
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
-            "Authorization": f"Bearer {access_token()}",
-            "MCP-Protocol-Version": PROTOCOL_VERSION,
+            "Authorization": f"Bearer {token}",
+            "MCP-Protocol-Version": self.protocol,
         }
         if self.session:
             headers["Mcp-Session-Id"] = self.session
         status, response_headers, body = fetch("POST", self.server, json.dumps(message).encode(), headers)
         if status == 401 and retry:
-            access_token(force_refresh=True)
-            return self._post(message, retry=False)
+            with self.lock:
+                # Another request may have renewed it already.
+                if access_token(self.agent, self.server) == token:
+                    access_token(self.agent, self.server, force_refresh=True)
+            return self.post(message, retry=False)
         if status >= 400:
             raise CaptureError(f"okWOW MCP returned {status}: {body[:300]!r}")
         if response_headers.get("mcp-session-id"):
             self.session = response_headers["mcp-session-id"]
-        return response_headers, body
+        messages: list[dict[str, Any]] = []
+        if "text/event-stream" in response_headers.get("content-type", ""):
+            data: list[str] = []
+            for line in body.decode("utf-8", "replace").splitlines() + [""]:
+                if line.startswith("data:"):
+                    data.append(line[5:].strip())
+                elif not line and data:
+                    messages.append(json.loads("\n".join(data)))
+                    data = []
+        elif body:
+            parsed = json.loads(body)
+            messages.extend(parsed if isinstance(parsed, list) else [parsed])
+        return messages
 
     def _send(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         self.next_id += 1
         request_id = self.next_id
-        headers, body = self._post({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
-        messages: list[dict[str, Any]] = []
-        if "text/event-stream" in headers.get("content-type", ""):
-            for line in body.decode("utf-8", "replace").splitlines():
-                if line.startswith("data:") and line[5:].strip():
-                    messages.append(json.loads(line[5:]))
-        elif body:
-            parsed = json.loads(body)
-            messages.extend(parsed if isinstance(parsed, list) else [parsed])
-        for message in messages:
+        for message in self.post({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}):
             if message.get("id") == request_id:
                 if "error" in message:
                     raise CaptureError(message["error"].get("message", str(message["error"])))
@@ -584,7 +635,7 @@ SENSITIVE_PATH = re.compile(
     r"(?:^|[\s/'\"=~])(?:\.env(?:\.[\w.-]+)?|\.envrc|\.netrc|\.npmrc|\.pypirc|\.pgpass|\.git-credentials|\.?credentials(?:\.json)?"
     r"|id_[rd]sa|id_ecdsa|id_ed25519|[\w.-]+\.pem|[\w.-]+\.p12|[\w.-]+\.pfx|[\w.-]+\.key|[\w.-]+\.keychain(?:-db)?"
     r"|secrets?\.(?:json|ya?ml|toml)|[\w.-]*\.tfstate(?:\.backup)?|[\w.-]*\.tfvars|service[-_]account[\w.-]*\.json"
-    r"|capture-token\.json|\.ssh/[\w.-]+|\.aws/[\w.-]+|\.kube/config|\.docker/config\.json|gh/hosts\.yml)(?:$|[\s'\"])"
+    r"|capture-token(?:-\w+)?\.json|\.ssh/[\w.-]+|\.aws/[\w.-]+|\.kube/config|\.docker/config\.json|gh/hosts\.yml)(?:$|[\s'\"])"
 )
 # A command that prints credentials has its output left out entirely.
 SENSITIVE_COMMAND = re.compile(
@@ -877,17 +928,21 @@ def _codex_hook_start(app: App, event: dict[str, Any], env: Mapping[str, str], p
 APPS = {
     app.name: app
     for app in (
-        App("claude", "Claude Code", ("CLAUDE_PROJECT_DIR", "CLAUDE_CODE_ENTRYPOINT"), _claude_dirs,
+        App("claude", AGENTS["claude"], ("CLAUDE_PROJECT_DIR", "CLAUDE_CODE_ENTRYPOINT"), _claude_dirs,
             _claude_hook_start, _claude_file_start, Session._claude,
             session_env=("CLAUDE_CODE_SESSION_ID",), folder_env=("CLAUDE_PROJECT_DIR",)),
-        App("codex", "Codex", ("CODEX_",), _codex_dirs, _codex_hook_start, _codex_file_start, Session._codex,
+        App("codex", AGENTS["codex"], ("CODEX_",), _codex_dirs, _codex_hook_start, _codex_file_start, Session._codex,
             session_env=("CODEX_THREAD_ID",)),
     )
 }
 
 
-def detect(path: Path, env: Mapping[str, str]) -> Optional[App]:
-    """The app whose session folders hold this file; its environment breaks a tie."""
+def detect(path: Optional[Path], env: Mapping[str, str]) -> Optional[App]:
+    """The app whose session folders hold this file; its environment breaks a tie.
+    With no file, the one app whose environment this is."""
+    if path is None:
+        owners = [app for app in APPS.values() if app.owns_env(env)]
+        return owners[0] if len(owners) == 1 else None
     owners = [app for app in APPS.values() if app.owns_file(path)]
     if len(owners) > 1:
         owners = [app for app in owners if app.owns_env(env)] or owners
@@ -941,7 +996,7 @@ def upload(
         return None
     path = session_file(app, path)
     start = start or session_start(app.file_start(path))
-    mcp = MCP(server())
+    mcp = MCP(server(), app.name)
     settings = mcp.call("get_session_capture", {"start": start})
     key = key or session_key(app, path.stem)
     if settings.get("action") != "send":
@@ -1088,11 +1143,11 @@ def spawn(*args: str) -> None:
         )
 
 
-def ask_once() -> bool:
-    """True the first time only, across every session that races for it."""
+def ask_once(agent: str) -> bool:
+    """True the first time only for the app, across every session that races for it."""
     private_dir(CONFIG_DIR)
     try:
-        os.close(os.open(ASKED_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        os.close(os.open(asked_file(agent), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
     except FileExistsError:
         return False
     return True
@@ -1108,15 +1163,17 @@ def hook() -> None:
     except ValueError:
         return
     name = event.get("hook_event_name", "")
-    if not TOKEN_FILE.exists():
-        # A fresh install: open okWOW's sign-in once, from the first session.
-        if name == "SessionStart" and ask_once():
-            spawn("login", "--quiet")
-        return
     session_id = event.get("session_id") or ""
     path = event.get("transcript_path") or ""
-    app = detect(Path(path), os.environ) if path else None
-    key = session_key(app, session_id) if app and session_id else ""
+    app = detect(Path(path) if path else None, os.environ)
+    if app is None:
+        return
+    if not token_file(app.name).exists():
+        # The app's first session: open okWOW's sign-in for it once.
+        if name == "SessionStart" and ask_once(app.name):
+            spawn("login", "--quiet", "--agent", app.name)
+        return
+    key = session_key(app, session_id) if session_id else ""
     if key:
         remember(app, session_id, path, event)
     if name == "SessionEnd" and key:
@@ -1132,46 +1189,113 @@ def command_login(args: argparse.Namespace) -> None:
     cfg = config()
     cfg["server"] = checked_server(args.server or cfg.get("server") or plugin_server())
     write_json(CONFIG_FILE, cfg)
-    ask_once()
-    outcome = login(cfg["server"])
-    print(f"Signed in to okWOW as {outcome.get('email') or 'you'}. The okWOW tools use this sign-in too: "
-          "new sessions pick it up; in a session that is already open, reconnect the okwow MCP server.")
+    ask_once(args.agent)
+    outcome = login(cfg["server"], args.agent)
+    print(f"Signed {AGENTS[args.agent]} in to okWOW as {outcome.get('email') or 'you'}. Its okWOW tools use this "
+          "sign-in too: new sessions pick it up; in a session that is already open, reconnect the okwow MCP server.")
     print(describe(outcome["settings"]))
+    if outcome["legacy"]:
+        print(LEGACY_NOTICE)
 
 
-def command_headers(_: argparse.Namespace) -> None:
-    """The plugin's MCP connection signs in with the same okWOW sign-in as capture."""
-    headers: dict[str, str] = {}
-    try:
-        # Only for the server this plugin's MCP connection talks to.
-        if connection().get("server") == checked_server(plugin_server()):
-            headers["Authorization"] = f"Bearer {access_token()}"
-    except Exception as error:  # noqa: BLE001 — stdout must stay a JSON object
-        log(f"headers: {error}")
-    if not headers and not TOKEN_FILE.exists() and ask_once():
-        spawn("login", "--quiet")
-    print(json.dumps(headers))
+def relay_error(message: dict[str, Any], text: str) -> Optional[dict[str, Any]]:
+    """A JSON-RPC error for a request; a notification or response gets none."""
+    if not isinstance(message, dict) or "id" not in message or "method" not in message:
+        return None
+    return {"jsonrpc": "2.0", "id": message["id"], "error": {"code": -32001, "message": f"okWOW: {text}"}}
 
 
-def command_logout(_: argparse.Namespace) -> None:
-    saved = read_json(TOKEN_FILE, {}, private=True)
+def command_mcp(args: argparse.Namespace) -> None:
+    """The app's okWOW tools: a stdio MCP server that relays each message to okWOW
+    over Streamable HTTP, signed in as the app. Writes only JSON-RPC to stdout."""
+    agent = args.agent
+    out = sys.stdout.buffer
+    sys.stdout = sys.stderr
+    mcp = MCP(plugin_server(), agent, connect=False)
+    write_lock = threading.Lock()
+    opened: list[bool] = []
+
+    def write(message: dict[str, Any]) -> None:
+        with write_lock:
+            out.write(json.dumps(message).encode() + b"\n")
+            out.flush()
+
+    def relay(message: Any) -> None:
+        if not token_file(agent).exists():
+            if not opened and ask_once(agent):
+                spawn("login", "--quiet", "--agent", agent)
+                opened.append(True)
+            if opened:
+                text = (f"okWOW opened in your browser so {AGENTS[agent]} can sign in. Finish there, then "
+                        "reconnect the okwow MCP server or start a new session.")
+            else:
+                text = f"{AGENTS[agent]} is not signed in to okWOW; {sign_in_step(agent)}, then try again."
+            reply = relay_error(message, text)
+            if reply:
+                write(reply)
+            return
+        initialize = isinstance(message, dict) and message.get("method") == "initialize"
+        try:
+            if initialize:
+                mcp.protocol = (message.get("params") or {}).get("protocolVersion") or PROTOCOL_VERSION
+            replies = mcp.post(message)
+        except Exception as error:  # noqa: BLE001 — the app gets an error, never a dead server
+            log(f"mcp {agent}: {error}")
+            reply = relay_error(message, str(error))
+            if reply:
+                write(reply)
+            return
+        for reply in replies:
+            if initialize and reply.get("id") == message["id"]:
+                # Later requests carry the version okWOW agreed to.
+                mcp.protocol = (reply.get("result") or {}).get("protocolVersion") or mcp.protocol
+            write(reply)
+
+    threads: list[threading.Thread] = []
+    for line in sys.stdin.buffer:
+        if not line.strip():
+            continue
+        try:
+            message = json.loads(line)
+        except ValueError:
+            write({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}})
+            continue
+        if isinstance(message, dict) and "id" in message and message.get("method") not in (None, "initialize"):
+            # Requests run side by side; initialize, notifications and responses in order.
+            thread = threading.Thread(target=relay, args=(message,))
+            thread.start()
+            threads.append(thread)
+        else:
+            relay(message)
+    for thread in threads:
+        thread.join()
+
+
+def command_logout(args: argparse.Namespace) -> None:
+    saved = read_json(token_file(args.agent), {}, private=True)
     if saved.get("store") == "keychain":
-        security("delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", saved.get("server", ""))
+        security("delete-generic-password", "-s", keychain_service(args.agent), "-a", saved.get("server", ""))
     with contextlib.suppress(FileNotFoundError):
-        TOKEN_FILE.unlink()
-    print("Signed out of okWOW on this machine: the okWOW tools and session capture stop until you sign in "
-          f"again. To revoke the connection too, remove \"{CLIENT_NAME}\" in okWOW under Settings → Authorized apps.")
+        token_file(args.agent).unlink()
+    print(f"Signed {AGENTS[args.agent]} out of okWOW on this machine: its okWOW tools and session capture stop "
+          f"until it signs in again. To revoke the connection too, remove \"{AGENTS[args.agent]}\" in okWOW under "
+          "Settings → Authorized apps.")
 
 
 def command_status(_: argparse.Namespace) -> None:
-    saved = read_json(TOKEN_FILE, {}, private=True)
     print(f"Server: {server()}")
-    if not saved:
-        print("Signed in: no. Run `okwow-capture login` to start saving sessions.")
+    signed_in = []
+    for agent, name in AGENTS.items():
+        saved = read_json(token_file(agent), {}, private=True)
+        if saved:
+            signed_in.append(agent)
+            print(f"{name}: signed in as {saved.get('profile', {}).get('email') or 'you'} "
+                  f"(sign-in kept in the {'Keychain' if saved.get('store') == 'keychain' else 'token file'})")
+        else:
+            print(f"{name}: not signed in; {sign_in_step(agent)}")
+    if not signed_in:
         return
-    print(f"Signed in: {saved.get('profile', {}).get('email') or 'yes'} "
-          f"(sign-in kept in the {'Keychain' if saved.get('store') == 'keychain' else 'token file'})")
-    settings = MCP(server()).call("get_session_capture", {})
+    settings = MCP(server(), signed_in[0]).call("get_session_capture", {})
     print(describe(settings))
     print(f"Sent after {config().get('idle_minutes', DEFAULT_IDLE_MINUTES)} idle minutes, or when a session ends.")
     sessions = state()["sessions"]
@@ -1226,13 +1350,18 @@ def command_upload(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="okwow-capture", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    p = sub.add_parser("login", help="sign in to okWOW and start saving sessions")
-    p.add_argument("--server", help=f"okWOW MCP URL (default: the plugin's, {PRODUCTION_SERVER})")
+    agents = sorted(AGENTS)
+    p = sub.add_parser("login", help="sign an app in to okWOW, for its okWOW tools and session capture")
+    p.add_argument("--agent", required=True, choices=agents, help="the app to sign in")
+    p.add_argument("--server", help=f"okWOW MCP URL (default: OKWOW_MCP_URL, else {PRODUCTION_SERVER})")
     p.add_argument("--quiet", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(run=command_login)
-    sub.add_parser("logout", help="sign out of okWOW on this machine").set_defaults(run=command_logout)
-    sub.add_parser("headers", help="print the okWOW sign-in for the plugin's MCP connection").set_defaults(
-        run=command_headers)
+    p = sub.add_parser("logout", help="sign an app out of okWOW on this machine")
+    p.add_argument("--agent", required=True, choices=agents, help="the app to sign out")
+    p.set_defaults(run=command_logout)
+    p = sub.add_parser("mcp", help="the app's okWOW tools: an MCP server on stdio, signed in as the app")
+    p.add_argument("--agent", required=True, choices=agents, help="the app that runs it")
+    p.set_defaults(run=command_mcp)
     sub.add_parser("status", help="show where sessions go and what was sent").set_defaults(run=command_status)
     p = sub.add_parser("start", help="print where this session started, as okWOW's capture rules match it "
                        "(sends nothing)")
