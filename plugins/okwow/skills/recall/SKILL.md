@@ -5,11 +5,10 @@ description: Use at the start of every task, to check what is already recorded a
 
 # Recall from okWOW
 
-okWOW holds the team's memories, tasks and the items in its Vault (artifacts, files, transcripts, skills). The `okwow` MCP server
-reads them as the signed-in user, with exactly the access they have in okWOW:
-the spaces (team areas) they have joined, their organization's memories and,
-in private mode (`switch_mode`), their own items. Every result carries `mode`:
-read it, because in shared mode the user's own items are not returned.
+okWOW holds the team's memories, tasks and the items in its Vault. The
+`okwow` MCP server reads them with the signed-in user's access. Every result
+says the connection's `mode`; in shared mode the user's own items are not
+returned.
 
 How okWOW works (places, roles, modes, item kinds, the knowledge graph,
 deleting and session capture) is explained at
@@ -36,18 +35,13 @@ owner `list_paths` names, or the user.
    - `search` with a short, specific query: the subject plus the
      distinguishing term ("billing retry policy", "mobile release checklist").
      Search twice: once for the concept, and once for exact names (PR
-     numbers, services, tables, features). Memories match by meaning only;
-     Vault titles and descriptions also match exact words.
-     If `has_more` is true, or results are off-topic, narrow the query instead
-     of reading everything. If `memory_search_failed` is true, memories could
-     not be searched this time: say so and retry or list instead.
-   - `list_memories` (optionally with `in` set to a place from `list_spaces`)
-     to browse what is saved, newest first, each with its group.
-     It also lists the place's groups.
-   - `list_tasks` for tasks: filter by owner (`me` or `any`), status
-     (`open`, `overdue`, `all`) and space (`in`). It defaults to the user's
-     own open tasks: pass `owner: "any"` to see what teammates have in
-     flight. `claimed_by` names an agent working a task.
+     numbers, services, tables, features). If `has_more` is true, or results
+     are off-topic, narrow the query. If `memory_search_failed` is true, say
+     so and retry or list instead.
+   - `list_memories` (optionally with `in` from `list_spaces`) to browse
+     what is saved, newest first, with its groups.
+   - `list_tasks` for tasks. It defaults to the user's own open tasks: pass
+     `owner: "any"` to see what teammates have in flight.
    - `search_entities` for the people, teams, customers and projects
      involved, then `get_node` and `list_edges` for what each owns, knows
      and belongs to; `list_paths` for how two connect or who knows a subject.

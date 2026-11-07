@@ -3,9 +3,8 @@
 A task is a to-do on a space's board. An agent works one in this order: find
 it, claim it, keep its checklist current, then complete it, drop it or ask a
 person. Every change goes through `update_task` and needs the editor role in
-the task's space; each call returns the task as `list_tasks` shows it.
-Creating a task needs shared mode; finding, claiming, updating and finishing
-an existing one work in either mode.
+the task's space. Creating a task needs shared mode; finding, claiming,
+updating and finishing an existing one work in either mode.
 
 ## Your session
 
@@ -42,17 +41,14 @@ nothing else; send `todos` in a separate call. `create_task` with
 same in `claimed_by`. Do not work on the task, and do not create a second task
 for the same work. You cannot message or stop that agent. Tell the user who
 holds it, then pick another task. The claim lapses an hour after that agent's
-last update, so the task may be free later; a person can also stop the agent
-in okWOW.
+last update, so the task may be free later.
 
 ## Keep the claim
 
 A claim lapses after an hour without an update from the session that holds it.
 Each `update_task` this session makes renews it, so update `todos` as each step
 changes, and at least once an hour during long work: they show the user your
-progress and keep the claim. `todos` replaces
-the whole checklist. Each item has `content`, `activeForm` and `status`
-(`pending`, `in_progress` or `completed`), and at most one is `in_progress`.
+progress and keep the claim. `todos` replaces the whole checklist.
 
 Three lapses in a row block the task until a person unblocks it. There is no
 action that just releases a claim: you give a task up by completing it,
@@ -70,22 +66,17 @@ scheduled task check), block without asking.
 
 `update_task` with `block: {"detail": "<what the person must do>"}` and no
 action ends your claim and stops every agent on the task until a person acts.
-Say exactly what you need: a decision, access, or a fact, in at most 500
-characters. Only a task on the board can be blocked; a task created with
-`tracked: false` cannot, so tell the user instead. Agents cannot unblock a
-task or stop another agent. A person answers in okWOW and unblocks the task
-there; `list_tasks` then shows `blocked` cleared, and you can `start` it
-again.
+Say exactly what you need: a decision, access, or a fact. Only a task on the
+board can be blocked; a task created with `tracked: false` cannot, so tell the
+user instead. Agents cannot unblock a task or stop another agent. A person
+answers in okWOW and unblocks the task there; `list_tasks` then shows
+`blocked` cleared, and you can `start` it again.
 
 ## Finish
 
-- `complete` with a `report`: `summary` (one or two sentences) and `outcome`
-  (`success`, `partial` or `failure`) are required. Add `how` (the steps or
-  findings), `challenges` (what was hard, how you checked the result, what is
-  unsure or unfinished), `lessons`, `artifacts` (the `vault:` ids the work
-  produced), `outputs`, and `unmet_requirements` (access or sources the work
-  needed and did not have). Optional `evidence` cites what proves it.
-  Completing marks every checklist step done and ends your claim.
+- `complete` with a `report`: what you did, the outcome, how you checked it,
+  what is unsure or unfinished, and what the work produced. Completing ends
+  your claim.
 - `drop` with a `reason` when the task should not be done.
 - `reopen` a closed task before you close it again.
 
@@ -94,9 +85,6 @@ what happened.
 
 ## Other changes
 
-`assign` takes `owner`: `"me"`, or one of `{"user_id": ...}` or
-`{"email": ...}` for a member, or `{"email": ...}`, `{"slack_user_id": ...}`
-or `{"person": ...}` for someone outside okWOW; never a bare name. Find a
-person's id with `search_entities`. Assign work to someone else only when the
-user asks.
-`set_due` takes `due_at` in ISO 8601 with a time zone; `null` clears it.
+`assign` takes an `owner`, never a bare name: find the person with
+`search_entities`. Assign work to someone else only when the user asks.
+`set_due` takes `due_at`; `null` clears it.

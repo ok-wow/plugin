@@ -15,26 +15,14 @@ to offer each fact first, offer it instead.
 
 ## Mode: who sees a save
 
-Every result carries the connection's `mode`. A new connection starts in
-private mode.
+Every result says the connection's `mode`; a new connection starts private.
+In private mode a save is the user's alone; in shared mode it reaches the
+place's members. Private mode refuses saves to `org:` and `create_task`;
+shared mode refuses `me`.
 
-- **private:** saves are the user's own, filed in the place you name, and
-  nobody else sees them. You read the user's own items and the team's.
-- **shared:** saves reach the members of the place. You read only what the
-  team can see.
-
-Before a save, know the mode (from the last result) and the place's
-audience (its `list_spaces` row), and state both when you report the save.
 Save in the mode you are in. When a private save holds something teammates
-need, say it is private and suggest shared mode. Call `switch_mode` only when
-the user says so. Switching changes where new saves land; an item saved
-earlier keeps its audience. The mode belongs to this connection and stays
-until someone switches it, across sessions. A space with a `private` audience
-still has members: a shared-mode save there reaches them, and anyone added
-later. Private mode refuses saves to `org:` and `create_task`; shared mode
-refuses `me`.
-
-How places, roles, modes and item kinds work is explained at
+need, say so and suggest shared mode; call `switch_mode` only when the user
+says so. How places, roles and modes work is explained at
 https://okwow.ai/docs/how-okwow-works/.
 
 ## 1. Choose the place
@@ -63,14 +51,10 @@ can see a place before you put those there.
 - **Vault content** (`create_content`): anything longer. `kind` is `auto`
   (default), `artifact`, `file`, `skill` or `transcript`. Pass `content` with a
   `title` for text; for an artifact set `format` to `markdown` (default),
-  `html`, `python` or `tsx`. Optional `description` and `source_urls`. The
-  `title` is a plain name with no `/` or `\`. Up to 200,000 characters go
-  inline; upload anything larger. Pass `kind` when a filename is ambiguous.
-- **Skill** (`create_content` with a `SKILL.md`): needs editor in a space;
-  any member may save one in the organization (shared mode) or in `me`
-  (private mode). It takes no description or source URLs, and only the
-  `SKILL.md` text goes with it, so inline what teammates need. A second skill
-  with the same name is refused: update the existing one.
+  `html`, `python` or `tsx`. Optional `description` and `source_urls`.
+- **Skill** (`create_content` with a `SKILL.md`): needs the editor role in a
+  space. Only the `SKILL.md` text is saved, so inline what teammates need from
+  its other files. To change one, update the existing skill.
 - **File or large text**: call `prepare_upload` with the exact byte size
   (up to 40 MB), `PUT` the bytes to the returned `upload_url` (valid 15
   minutes), then call `create_content` with `upload` set to the returned
@@ -123,31 +107,20 @@ offer to delete the private copy so search does not return both.
 
 ## Tasks
 
-`create_task` needs shared mode, the editor role, a space (`in`) and a title.
-`owner` is optional: `"me"`, or `{"email": ...}`, `{"user_id": ...}`,
-`{"person": ...}` or `{"slack_user_id": ...}`; never a bare name. Give work to
-someone else only when the user asks. `tracked: false` keeps a task off the
-team's board as your own checklist, with no owner or due date. The user is
-recorded as a watcher. The same title and owner again returns the first task
-with `duplicate: true`. Use `list_tasks` to find tasks (ids are
-`task:<uuid>`), then `update_task` to `start`, `complete`, `drop` (with a
-reason), `reopen`, `assign` or `set_due`; this needs the editor role in that
-space.
+`create_task` needs shared mode, a space (`in`) and a title. `owner` is
+optional and never a bare name; give work to someone else only when the user
+asks. `tracked: false` keeps a task off the team's board as your own
+checklist.
 
 Before you work on a task (claim it, update its checklist, block, complete or
-drop it), read `references/tasks.md` and follow it: it covers passing your
-session, claims and how they lapse, asking a person, and the completion
-report.
+drop it), read `references/tasks.md` and follow it.
 
 ## 6. Retries
 
-If a create times out or fails without a reason ("The operation could not
-complete"), retry the same call with the same place and the exact same
-content: okWOW recognizes content it already holds and returns the existing
-item with `duplicate: true`. Retrying `create_content` with the same `upload`
-returns the item it became. Do not change the text between those attempts, or
-you will create a second copy. A refusal that gives a reason stored nothing:
-fix the call and send it again.
+If a create times out or fails without a reason, retry the same call with the
+same place and exactly the same content: okWOW returns the item it already
+saved, with `duplicate: true`. Changing the text between attempts creates a
+second copy.
 
 ## 7. Report
 

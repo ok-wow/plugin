@@ -45,8 +45,8 @@ To undo it, the user deletes the block, or runs this step again to change it.
 ## okWOW
 
 okWOW (the `okwow` MCP server) holds this user's team knowledge: memories,
-tasks, the items in its Vault and the knowledge graph of people and subjects. It takes
-precedence over local notes. Current instructions take precedence over older
+tasks, the items in its Vault and the knowledge graph of people and subjects.
+It takes precedence over local notes. Current instructions take precedence over older
 memories. How it works, in short (details:
 https://okwow.ai/docs/how-okwow-works/):
 
@@ -67,8 +67,7 @@ https://okwow.ai/docs/how-okwow-works/):
 1. **Check okWOW first.** Before you start any task, find out what is already
    recorded and what others are doing:
    - `search` for the task's topic twice: once for the concept, and once for
-     exact names (PR numbers, services, tables, features). Memories match by
-     meaning only; Vault titles and descriptions also match exact words.
+     exact names (PR numbers, services, tables, features).
    - `search_entities` for the people, teams, customers and projects
      involved, then `get_node` and `list_edges` for what they own and know.
    - `list_tasks` for work already in flight on the same thing.

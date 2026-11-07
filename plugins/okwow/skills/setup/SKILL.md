@@ -30,8 +30,7 @@ Rules for every step:
 
 ## 1. Read what is there
 
-From okWOW, call `get_profile` (the active organization as `org`, its `kind`
-personal or team, the user's `org_role` owner, admin or member, and `seat`),
+From okWOW, call `get_profile` (the user's organization and role),
 `list_spaces` with `members: true`, `list_invites` and `get_session_capture`.
 
 On this machine, read only, without changing anything:
@@ -82,16 +81,12 @@ needs an organization, which the user creates in the browser.
 
 Plan the spaces from step 2 against what `list_spaces` returned, then:
 
-- `create_space` with a `title`, optional `description`, `audience`
-  (`private`: the user alone; `subset`: the people named; `org`: anyone in
-  the organization may join) and `members`, each with a `role` (`viewer`
-  reads, `editor` also saves, `admin` also manages the space).
-- `update_space` changes details, `audience`, `add` and `remove`. Only the
-  change is applied and everyone else keeps their role. Details and members
-  need admin; only the owner changes the audience. Never drop an existing
-  member, add people or widen an audience unless the user named the change,
-  and say who newly gains access first. An `org` space lets anyone in the
-  organization join, as an editor, and see what it holds.
+- `create_space` with a `title`, optional `description`, an `audience`
+  (`private`, `subset` or `org`) and `members` with their roles.
+- `update_space` changes details, `audience`, `add` and `remove`; everyone
+  else keeps their role. Never drop an existing member, add people or widen an
+  audience unless the user named the change, and say who newly gains access
+  first.
 
 People are named by `user_id`, email or `entity:` id; a name alone is never
 resolved: look it up with `search_entities` or `list_spaces` members first.
@@ -103,17 +98,10 @@ follow it: it maps the spaces, finds the transcripts on this machine, places
 each one (or proposes a new space when one is warranted) and uploads them
 after one approval.
 
-For other files the user picks (`SKILL.md` skills, documents), into the
-space they chose: `prepare_upload` with the
-exact byte size, `PUT` the bytes, then `create_content` with the `upload` id.
-A skill needs editor in the space; any member may also keep one in the
-organization (shared mode) or in `me` (private mode). In private mode a skill
-saved in a space is the user's own until `update_content` with `in` shares
-it. Only its `SKILL.md` goes with it, so inline what
-teammates need from its other files. Pass `kind` when a filename is
-ambiguous. To keep a local pointer to the okWOW copy, see "A skill pointer"
-in `references/agent-instructions.md`. The `save` skill covers retries and
-receipts.
+For other files the user picks (`SKILL.md` skills, documents), save them to
+the space they chose as the `save` skill describes. To keep a local pointer
+to a skill's okWOW copy, see "A skill pointer" in
+`references/agent-instructions.md`.
 
 ## 6. Move local agent memory into okWOW
 
@@ -173,12 +161,12 @@ task in their app.
 
 ## 10. Recap
 
-Finish with a short recap: what you created, invited, joined, saved, scheduled
-and changed (including the instruction file and its path), each with its `url` where a receipt gave one, and what still
-needs the browser: connecting tools (okWOW → Plugins), creating an
-organization, billing and seats, and granting an agent access to connected
-accounts such as Gmail (okWOW → Settings → Authorized apps → Manage access).
-Never try to do those yourself.
+Finish with a short recap: what you created, invited, joined, saved,
+scheduled and changed (including the instruction file and its path), each
+with its `url` where a receipt gave one, and what still needs the browser:
+adding plugins (okWOW → Plugins), creating an organization, billing and
+seats, and giving an agent access to plugins (okWOW → Settings → Authorized
+apps → Manage access). Never try to do those yourself.
 
 ## Errors
 
