@@ -41,7 +41,8 @@ owner `list_paths` names, or the user.
    - `list_memories` (optionally with `in` from `list_spaces`) to browse
      what is saved, newest first, with its groups.
    - `list_tasks` for tasks. It defaults to the user's own open tasks: pass
-     `owner: "any"` to see what teammates have in flight.
+     `owner: "any"` to see what teammates have in flight, with `in` for the
+     space the work belongs to, since the whole board is long.
    - `search_entities` for the people, teams, customers and projects
      involved, then `get_node` and `list_edges` for what each owns, knows
      and belongs to; `list_paths` for how two connect or who knows a subject.
