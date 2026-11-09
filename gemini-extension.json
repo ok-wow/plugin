@@ -1,6 +1,6 @@
 {
   "name": "okwow",
-  "version": "0.1.49",
+  "version": "0.1.50",
   "description": "Find team knowledge and save memories and documents in okWOW.",
   "mcpServers": {
     "okwow": {

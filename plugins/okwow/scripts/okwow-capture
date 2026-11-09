@@ -365,9 +365,31 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-PAGE = """<!doctype html><meta charset="utf-8"><title>okWOW</title>
-<body style="font:16px system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem">
-<h1 style="font-size:1.4rem">{heading}</h1><p>{body}</p>"""
+CONNECTOR_ICON = "M10.001 1.74902C11.9214 1.74903 13.4785 3.30612 13.4785 5.22656C13.4784 6.88929 12.3107 8.27807 10.751 8.62109V10.3027L12.8672 11.8633C13.4145 11.5038 14.0698 11.295 14.7734 11.2949C16.6939 11.2949 18.251 12.852 18.251 14.7725C18.2507 16.6927 16.6937 18.249 14.7734 18.249C12.8534 18.2487 11.2971 16.6925 11.2969 14.7725C11.2969 14.1042 11.4848 13.4792 11.8115 12.9492L10.001 11.6133L8.18945 12.9502C8.51617 13.4801 8.70508 14.1042 8.70508 14.7725C8.70484 16.6926 7.14869 18.2489 5.22852 18.249C3.30838 18.2488 1.75121 16.6926 1.75098 14.7725C1.75098 12.8521 3.30824 11.2951 5.22852 11.2949C5.9324 11.295 6.58735 11.5047 7.13477 11.8643L9.25098 10.3018V8.62109C7.69143 8.27795 6.52356 6.88917 6.52344 5.22656C6.52344 3.30624 8.0807 1.74922 10.001 1.74902ZM5.22852 12.7949C4.13667 12.7951 3.25098 13.6806 3.25098 14.7725C3.25121 15.8642 4.13681 16.7488 5.22852 16.749C6.32027 16.7489 7.20484 15.8642 7.20508 14.7725C7.20508 13.6805 6.32041 12.7951 5.22852 12.7949ZM14.7734 12.7949C13.6817 12.7953 12.7969 13.6807 12.7969 14.7725C12.7971 15.8641 13.6819 16.7487 14.7734 16.749C15.8653 16.749 16.7507 15.8643 16.751 14.7725C16.751 13.6804 15.8655 12.7949 14.7734 12.7949ZM10.001 3.24902C8.90913 3.24922 8.02344 4.13467 8.02344 5.22656C8.02358 6.31834 8.90921 7.20293 10.001 7.20312C11.0929 7.20312 11.9784 6.31846 11.9785 5.22656C11.9785 4.13455 11.093 3.24903 10.001 3.24902Z"
+PAGE = """<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>okWOW</title>
+<style>
+*{{box-sizing:border-box}}
+body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:16px;color:rgba(9,9,11,.9);
+font-family:Saans,"Inter Variable",Inter,ui-sans-serif,system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased;
+background:#fd607c radial-gradient(120% 90% at 15% 10%,#ffb3c7 0,transparent 55%) no-repeat}}
+main{{width:100%;max-width:500px;display:flex;flex-direction:column;align-items:center;gap:32px;padding:40px;border-radius:44px;
+background:linear-gradient(57deg,rgba(255,255,255,.72) 20.05%,rgba(255,255,255,.4) 100%);text-align:center}}
+.status{{padding:12px;border-radius:50%;background:{tone};color:#fff;display:flex}}
+.status svg{{width:28px;height:28px}}
+h1{{margin:0;font-size:32px;line-height:1.2;font-weight:490;text-wrap:balance}}
+p{{margin:-12px 32px 0;font-size:14px;line-height:20px;color:rgba(9,9,11,.5)}}
+p a{{color:inherit;text-decoration:underline;white-space:nowrap}}
+@media (max-width:540px){{main{{padding:32px 20px;border-radius:32px}}p{{margin:-12px 0 0}}h1{{font-size:28px}}}}
+</style>
+<main>
+<div class="status" aria-hidden="true"><svg viewBox="0 0 20 20"><path fill="currentColor" d="{icon}"/></svg></div>
+<h1>{heading}</h1><p>{body}<br>You can close this tab.</p>
+</main></html>"""
+
+
+def page(heading: str, body: str, ok: bool) -> str:
+    return PAGE.format(heading=heading, body=body, tone="#3ea44b" if ok else "#d91a45", icon=CONNECTOR_ICON)
 
 
 def login(url: str, agent: str) -> dict[str, Any]:
@@ -455,21 +477,21 @@ def login(url: str, agent: str) -> dict[str, Any]:
                 return
             if "code" not in query:
                 outcome["error"] = query.get("error_description") or query.get("error") or "no code"
-                heading, body = "Not signed in", "okWOW was not connected. You can close this tab."
+                heading, body = "Not signed in", "okWOW was not connected.<br>Start the sign-in again from your agent."
             else:
                 try:
                     outcome.update(finish(query["code"]))
                     heading = f"{AGENTS[agent]} is connected to okWOW"
                     body = describe(outcome["settings"], html=True)
                     if outcome["legacy"]:
-                        body += " " + html_escape(LEGACY_NOTICE)
+                        body += "<br>" + html_escape(LEGACY_NOTICE)
                 except Exception as error:  # noqa: BLE001 — shown on the page, not lost in a reset
                     outcome["error"] = str(error) if isinstance(error, CaptureError) else f"{type(error).__name__}: {error}"
                     heading, body = "Sign-in did not finish", html_escape(str(error))
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(PAGE.format(heading=heading, body=body).encode())
+            self.wfile.write(page(heading, body, ok="error" not in outcome).encode())
 
         def log_message(self, *args: Any) -> None:
             pass
@@ -505,9 +527,10 @@ def describe(settings: dict[str, Any], html: bool = False) -> str:
         text = (f"Your agent sessions are saved as your own chats in {where}, unless a rule in okWOW for "
                 "the folder or repository they start in sends them elsewhere or skips them. "
                 "okWOW summarizes them and learns from them, like a chat in the app.")
-    if link and html:
+    if html:
+        short = f"Your agent sessions now save to {where}." if settings.get("action") == "send" else "Session capture is paused."
         safe = html_escape(link).replace('"', "&quot;")
-        return f'{html_escape(text)} <a href="{safe}">Change this in okWOW</a>.'
+        return html_escape(short) + (f'<br><a href="{safe}">Change this in okWOW</a>' if link else "")
     return f"{text} Change this at {link}" if link else text
 
 
@@ -529,7 +552,7 @@ class MCP:
             self._send("initialize", {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
-                "clientInfo": {"name": "okwow-capture", "version": "0.1.49"},
+                "clientInfo": {"name": "okwow-capture", "version": "0.1.50"},
             })
             self.post({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
