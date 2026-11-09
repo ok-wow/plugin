@@ -33,4 +33,18 @@ with tempfile.TemporaryDirectory() as tmp:
                 assert 0 < len(interface['shortDescription']) <= 30
                 cases = data['extensions']['com.openai']['review']['test_cases']
                 assert len(cases['positive']) == 5 and len(cases['negative']) == 3
-print('Release archives passed host layout, version and scope checks.')
+
+# The committed directory plugin is what the build script writes, and runs no code locally.
+sys.path.insert(0, str(ROOT / 'scripts'))
+import build_directory_plugin as directory
+expected = directory.files()
+committed = {str(p.relative_to(directory.DEFAULT_OUTPUT)): p.read_bytes()
+             for p in directory.DEFAULT_OUTPUT.rglob('*') if p.is_file()}
+assert committed == expected, ('directory/okwow is out of date; run python3 scripts/build_directory_plugin.py: '
+                               + ', '.join(sorted(set(committed) ^ set(expected)) or
+                                           [n for n in expected if committed.get(n) != expected[n]]))
+assert not any(n.startswith(('hooks/', 'scripts/', 'skills/capture/')) for n in committed)
+manifest = json.loads(committed['.claude-plugin/plugin.json'])
+assert manifest['name'] == 'okwow' and manifest['version'] == version and 'hooks' not in manifest
+assert json.loads(committed['.mcp.json']) == {'mcpServers': {'okwow': {'type': 'http', 'url': 'https://api.okwow.ai/mcp'}}}
+print('Release archives and the directory plugin passed host layout, version and scope checks.')

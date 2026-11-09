@@ -66,8 +66,8 @@ Branch on `org_role` from `get_profile`:
   with `create_invites`, and to `revoke` stale sent invites with
   `update_invite`. If `create_invites` is not among your tools, this
   connection was approved without "Manage account" access: tell the user to
-  sign this app in to okWOW again (see the capture skill's Connect section)
-  and tick "Manage account" when approving.
+  sign this app in to okWOW again (see "Signing in again" below) and tick
+  "Manage account" when approving.
 - **Member:** you cannot invite. Accept or decline each received invite from
   `list_invites` with `update_invite` (`accept`, `decline`). Join spaces open
   to the organization with `update_space` and `membership: join` (pass
@@ -121,6 +121,12 @@ so that team saves reach the team.
 
 ## 8. Session capture
 
+If this plugin has no `capture` skill, session capture is not installed. If
+the user wants their sessions saved to okWOW, tell them it comes with the
+full okWOW plugin at https://github.com/ok-wow/plugin, which they install in
+place of this one by following its README. Do not install it yourself. Then
+skip this step.
+
 For each repository or folder from step 1 whose sessions should go somewhere
 other than where `get_session_capture` says, follow the `capture` skill's
 "Choose where a folder's sessions go" (one confirmed
@@ -171,4 +177,10 @@ apps → Manage access). Never try to do those yourself.
 ## Errors
 
 A refusal stored nothing and its message says what to do next: follow it.
-If the error is about signing in, see the capture skill's Connect section.
+If the error is about signing in, see "Signing in again".
+
+## Signing in again
+
+If this plugin has a `capture` skill, follow its Connect section. Otherwise
+the user reconnects the `okwow` MCP server in their app's MCP settings and
+approves access in the browser.
