@@ -25,8 +25,8 @@ Settings → Authorized apps, where each app has its own row.
 
 ## Releases
 
-The commands below install the latest plugin, from `main`, and follow it as it
-moves. Every change reaches `main` through a reviewed pull request. To stay on
+The Claude Code and Codex commands below install the latest plugin, from
+`main`, and follow it as it moves; Gemini CLI installs the latest release. Every change reaches `main` through a reviewed pull request. To stay on
 one version instead, see [Pin a version](#pin-a-version). Releases are listed on
 [GitHub](https://github.com/ok-wow/plugin/releases).
 
@@ -77,9 +77,8 @@ file's first line, where Codex started it.
 gemini extensions install https://github.com/ok-wow/plugin
 ```
 
-The first time Gemini CLI starts the okWOW tools, your browser opens okWOW:
-sign in and approve access for Gemini CLI, then restart Gemini CLI. There is no
-separate `/mcp auth`. The okWOW tools need Python 3. The Gemini extension
+Gemini CLI installs the latest release. Then run `/mcp auth okwow` in Gemini
+CLI: your browser opens okWOW to sign in and approve access. The Gemini extension
 includes the recall and save skills; it does not include setup or session
 capture.
 
@@ -89,9 +88,9 @@ To install one release and stay on it, add its tag (the latest is on the
 [releases page](https://github.com/ok-wow/plugin/releases)):
 
 ```bash
-claude plugin marketplace add https://github.com/ok-wow/plugin.git#v0.1.49
-codex plugin marketplace add ok-wow/plugin --ref v0.1.49
-gemini extensions install https://github.com/ok-wow/plugin --ref v0.1.49
+claude plugin marketplace add https://github.com/ok-wow/plugin.git#<tag>
+codex plugin marketplace add ok-wow/plugin --ref <tag>
+gemini extensions install https://github.com/ok-wow/plugin --ref <tag>
 ```
 
 A pinned install does not move until you add the marketplace again with a newer
@@ -130,7 +129,7 @@ sessions going to okWOW?" for the current state.
   Repositories are named by their remote, with any credentials in the URL
   left out.
 - **One connection per app.** Each app signs in to okWOW once, under its own
-  name ("Claude Code", "Codex" or "Gemini CLI"), and both its okWOW tools and
+  name ("Claude Code" or "Codex"), and both its okWOW tools and
   its session capture use that sign-in; one app's sign-in, sign-out or
   revocation leaves the others alone. You can revoke each in okWOW under
   Settings → Authorized apps. On macOS the tokens are kept in your Keychain;
