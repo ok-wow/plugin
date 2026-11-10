@@ -15,6 +15,11 @@ Run: python3 tests/check_capture.py [--report path.json]
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import http.client
+import importlib.machinery
+import importlib.util
 import json
 import os
 import queue
@@ -82,6 +87,9 @@ class Fake:
         # Every token grant: its type and the name of the client it was for.
         self.grants: list[tuple[str, str]] = []
         self.issued = 0
+        # Authorization codes by value: the client, redirect and PKCE challenge they were issued for, and whether spent.
+        self.codes: dict[str, dict[str, Any]] = {}
+        self.redirects: dict[str, list[str]] = {}
         self.refresh_ok = True
         # Answer MCP requests as an event stream instead of JSON.
         self.sse = False
@@ -154,7 +162,10 @@ class Fake:
                 if path.path == "/authorize":
                     # Consent granted at once: redirect back with a code.
                     q = dict(urllib.parse.parse_qsl(path.query))
-                    target = q["redirect_uri"] + "?" + urllib.parse.urlencode({"code": "code-1", "state": q["state"]})
+                    code = f"code-{len(fake.codes) + 1}"
+                    fake.codes[code] = {"client_id": q["client_id"], "redirect_uri": q["redirect_uri"],
+                                        "challenge": q["code_challenge"], "used": False}
+                    target = q["redirect_uri"] + "?" + urllib.parse.urlencode({"code": code, "state": q["state"]})
                     return self.reply(302, None, {"Location": target})
                 self.reply(404, {})
 
@@ -163,12 +174,23 @@ class Fake:
                 raw = self.body()
                 if path == "/register":
                     client_id = f"client-{fake.registrations + 1}"
-                    fake.clients[client_id] = json.loads(raw).get("client_name", "")
+                    registration = json.loads(raw)
+                    fake.clients[client_id] = registration.get("client_name", "")
+                    fake.redirects[client_id] = registration.get("redirect_uris", [])
                     return self.reply(201, {"client_id": client_id})
                 if path == "/token":
                     fields = dict(urllib.parse.parse_qsl(raw.decode()))
                     client_id = fields.get("client_id", "")
                     fake.grants.append((fields.get("grant_type", ""), fake.clients.get(client_id, "")))
+                    if fields.get("grant_type") == "authorization_code":
+                        issued = fake.codes.get(fields.get("code", ""))
+                        verifier = fields.get("code_verifier", "").encode()
+                        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier).digest()).rstrip(b"=").decode()
+                        if (not issued or issued["used"] or issued["client_id"] != client_id
+                                or issued["redirect_uri"] != fields.get("redirect_uri")
+                                or issued["challenge"] != challenge):
+                            return self.reply(400, {"error": "invalid_grant", "error_description": "bad code"})
+                        issued["used"] = True
                     if fields.get("grant_type") == "refresh_token" and not fake.refresh_ok:
                         return self.reply(400, {"error": "invalid_grant"})
                     fake.issued += 1
@@ -928,6 +950,134 @@ def main() -> int:
         case("start sends nothing to okWOW", not fake.calls and not fake.puts and fake.registrations == registrations,
              fake.tools())
 
+
+
+        # Headless sign-in: print an authorize URL now, finish with the code later.
+        loader = importlib.machinery.SourceFileLoader("okwow_capture_under_test", str(PLUGIN / "scripts" / "okwow-capture"))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+        sys.modules[loader.name] = module
+        loader.exec_module(module)
+
+        def mapped(url: str) -> str:
+            try:
+                return module.headless_redirect(url, None)
+            except module.CaptureError as error:
+                return f"refused: {error}"
+
+        case("headless: production's api host maps to app.okwow.ai",
+             mapped("https://api.okwow.ai/mcp") == "https://app.okwow.ai/mcp-login/code", mapped("https://api.okwow.ai/mcp"))
+        case("headless: staging's api host maps to staging.app.okwow.ai",
+             mapped("https://staging.api.okwow.ai/mcp") == "https://staging.app.okwow.ai/mcp-login/code",
+             mapped("https://staging.api.okwow.ai/mcp"))
+        unmapped = [mapped(u) for u in ("http://127.0.0.1:9/mcp", "https://okwow.ai/mcp", "https://mcp.okwow.ai/mcp")]
+        case("headless: a host that does not fit is refused without --redirect-uri",
+             all(u.startswith("refused:") and "--redirect-uri" in u for u in unmapped), unmapped)
+        case("headless: --redirect-uri overrides when https, and must be https",
+             module.headless_redirect("http://127.0.0.1:9/mcp", "https://app.example/mcp-login/code")
+             == "https://app.example/mcp-login/code" and mapped("http://127.0.0.1:9/mcp").startswith("refused")
+             and module.headless_redirect("https://api.okwow.ai/mcp", "https://x.example/c") == "https://x.example/c",
+             None)
+        try:
+            module.headless_redirect("https://api.okwow.ai/mcp", "http://evil.example/c")
+            plain_http_refused = False
+        except module.CaptureError:
+            plain_http_refused = True
+        case("headless: a non-https --redirect-uri is refused", plain_http_refused)
+
+        redirect = "https://app.example/mcp-login/code"
+        pending = home.config / "capture-pending-gemini.json"
+
+        def start_headless(*extra: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+            done = home.capture("login", "--agent", "gemini", "--headless", *extra)
+            found = re.search(r"https?://\S+/authorize\?\S+", done.stdout)
+            return done, dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(found.group(0)).query)) if found else {}
+
+        def consent(query: dict[str, str]) -> tuple[str, str]:
+            """What the browser does at the authorize URL: the code and state okWOW's page shows."""
+            conn = http.client.HTTPConnection(urllib.parse.urlsplit(fake.base).netloc)
+            conn.request("GET", "/authorize?" + urllib.parse.urlencode(query))
+            location = urllib.parse.urlsplit(conn.getresponse().getheader("Location") or "")
+            got = dict(urllib.parse.parse_qsl(location.query))
+            return got["code"], got["state"]
+
+        home.capture("logout", "--agent", "gemini")
+        before = fake.registrations
+        bare = home.capture("login", "--agent", "gemini", "--headless")
+        case("headless: a host that does not fit needs --redirect-uri; nothing is registered or written",
+             bare.returncode != 0 and "--redirect-uri" in bare.stderr and fake.registrations == before
+             and not pending.exists(), bare.stdout + bare.stderr)
+        done, query = start_headless("--redirect-uri", redirect)
+        data = json.loads(pending.read_text()) if pending.exists() else {}
+        case("headless start prints the authorize URL for the derived redirect and exits",
+             done.returncode == 0 and query.get("redirect_uri") == redirect and query.get("code_challenge_method") == "S256"
+             and query.get("state") and fake.redirects.get(query.get("client_id", "")) == [redirect], done.stdout + done.stderr)
+        case("headless start writes a private pending file with the verifier, state and client",
+             oct(pending.stat().st_mode & 0o777) == "0o600" and data.get("state") == query.get("state")
+             and data.get("client_id") == query.get("client_id") and data.get("redirect_uri") == redirect
+             and data.get("server") == home.url and data.get("verifier") and data.get("created_at"),
+             {k: v for k, v in data.items() if k != "verifier"})
+        case("headless start stores no tokens", not home.token("gemini").exists())
+
+        code, state = consent(query)
+        fake.reset()
+        done = home.capture("login", "--agent", "gemini", "--finish", f"{code}#{state}")
+        saved = json.loads(home.token("gemini").read_text()) if home.token("gemini").exists() else {}
+        case("headless finish signs in and reports the email and capture settings",
+             done.returncode == 0 and "pat@example.com" in done.stdout and SPACE["label"] in done.stdout
+             and "get_session_capture" in fake.tools(), done.stdout + done.stderr)
+        case("headless finish deletes the pending file", not pending.exists())
+        loopback_keys = set(json.loads(home.token("codex").read_text())) - {"port"}
+        case("headless finish stores the same token file as the loopback sign-in",
+             set(saved) - {"port"} == loopback_keys and saved.get("store") == "file"
+             and saved.get("profile", {}).get("email") == "pat@example.com"
+             and oct(home.token("gemini").stat().st_mode & 0o777) == "0o600", sorted(saved))
+        fake.reset()
+        fake.grants.clear()
+        saved["expires_at"] = 0
+        home.token("gemini").write_text(json.dumps(saved))
+        replies = round_trip(home.relay("gemini"))
+        case("a headless sign-in refreshes like any other",
+             fake.grants == [("refresh_token", "Gemini CLI")] and not round_trip_error(fake, replies, "Gemini CLI"),
+             {"grants": fake.grants, "error": round_trip_error(fake, replies, "Gemini CLI")})
+
+        done = home.capture("login", "--agent", "gemini", "--finish", f"{code}#{state}")
+        case("finish with no pending file is refused with a message",
+             done.returncode != 0 and "--headless" in done.stderr, done.stderr)
+
+        _, query = start_headless("--redirect-uri", redirect)
+        code, state = consent(query)
+        grants = len(fake.grants)
+        done = home.capture("login", "--agent", "gemini", "--finish", f"{code}#wrong-{state}")
+        case("a wrong state is refused before any exchange, and the pending file is gone",
+             done.returncode != 0 and "state" in done.stderr and len(fake.grants) == grants and not pending.exists(),
+             done.stderr)
+
+        _, query = start_headless("--redirect-uri", redirect)
+        code, state = consent(query)
+        data = json.loads(pending.read_text())
+        data["created_at"] -= 11 * 60
+        pending.write_text(json.dumps(data))
+        pending.chmod(0o600)
+        done = home.capture("login", "--agent", "gemini", "--finish", f"{code}#{state}")
+        case("an expired pending file is refused before any exchange, and removed",
+             done.returncode != 0 and "expired" in done.stderr and len(fake.grants) == grants and not pending.exists(),
+             done.stderr)
+
+        _, query = start_headless("--redirect-uri", redirect)
+        spent, state = consent(query)
+        done = home.capture("login", "--agent", "gemini", "--finish", f"{spent}#{state}")
+        _, query = start_headless("--redirect-uri", redirect)
+        _, state = consent(query)
+        done = home.capture("login", "--agent", "gemini", "--finish", f"{spent}#{state}")
+        case("a reused code is refused with a message, and the pending file is removed",
+             done.returncode != 0 and "start again" in done.stderr and not pending.exists(), done.stderr)
+
+        _, query = start_headless("--redirect-uri", redirect)
+        code, state = consent(query)
+        done = home.capture("login", "--agent", "gemini", "--finish", code)
+        case("finish accepts a bare code", done.returncode == 0 and "pat@example.com" in done.stdout
+             and not pending.exists(), done.stdout + done.stderr)
+        case("no code or state lands in the log", code not in home.log() and state not in home.log(), None)
 
         # Codex runs the plugin's own hooks: nothing writes its hooks file.
         gone = home.capture("install-codex")
