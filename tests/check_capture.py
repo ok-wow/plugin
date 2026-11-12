@@ -71,6 +71,12 @@ class Fake:
         # Called while get_session_capture is answered, before its reply is sent.
         self.on_settings: Callable[[], None] = lambda: None
         self.has_settings_tool = True
+        # okWOW's memory index; None answers as an okWOW that is down. Each app's
+        # connection has its own mode, by client id.
+        self.modes: dict[str, str] = {}
+        self.index: dict[str, Any] | None = {
+            "groups": 1, "truncated": False,
+            "index": f'- Workspace memories in "My Workspace" (in: {SPACE["id"]}, ID: group:3): Deploys'}
         self.upload_url: Callable[[str], str] = lambda base: f"{base}/upload/1"
         self.calls: list[dict[str, Any]] = []
         # Every MCP request: its method, bearer token and Mcp-Session-Id.
@@ -195,6 +201,13 @@ class Fake:
                                             "error": {"code": -32600, "message": "missing Mcp-Session-Id"}})
                 if message["method"] == "tools/list":
                     return self.rpc(message["id"], {"tools": [{"name": "get_profile", "inputSchema": {"type": "object"}}]})
+                if message["method"] == "resources/read":
+                    fake.calls.append({"name": "resources/read", "arguments": message["params"], "token": token})
+                    if fake.index is None or message["params"]["uri"] != "okwow://memory/index/all":
+                        return self.reply(503, {})
+                    index = {**fake.index, "mode": fake.modes.get(fake.tokens[token], "private")}
+                    return self.rpc(message["id"], {"contents": [
+                        {"uri": message["params"]["uri"], "text": json.dumps(index)}]})
                 name = message["params"]["name"]
                 arguments = message["params"]["arguments"]
                 fake.calls.append({"name": name, "arguments": arguments, "token": token})
@@ -935,6 +948,61 @@ def main() -> int:
              gone.stderr.strip())
         case("nothing writes ~/.codex/hooks.json", not (home.dir / ".codex" / "hooks.json").exists(),
              sorted(str(p) for p in (home.dir / ".codex").iterdir()))
+
+        # okWOW memory, per app: its sessions start with the okWOW groups its own
+        # connection reads, in its own mode, instead of its own memory.
+        for agent in ("claude", "codex"):
+            if not home.token(agent).exists():
+                home.capture("login", "--agent", agent)
+        fake.modes[json.loads(home.token("codex").read_text())["client_id"]] = "shared"
+        claude_settings = home.dir / ".claude" / "settings.json"
+        codex_config = home.dir / ".codex" / "config.toml"
+        claude_before = '{\n  "theme": "dark",\n  "autoMemoryEnabled": true\n}\n'
+        codex_before = 'model = "gpt-5"\n\n[memories]\ngenerate_memories = true\n\n[tui]\nnotifications = true\n'
+        claude_settings.write_text(claude_before)
+        codex_config.write_text(codex_before)
+        quiet = home.fire("SessionStart", "m0", "", home.dir)
+        case("with okWOW memory off a session start adds nothing", quiet.stdout == "", quiet.stdout)
+        on = [home.capture("memory", "on", "--agent", agent) for agent in ("claude", "codex")]
+        codex_after = codex_config.read_text()
+        case("memory on turns each app's own memory off and keeps its other settings",
+             all(done.returncode == 0 for done in on)
+             and json.loads(claude_settings.read_text()) == {"theme": "dark", "autoMemoryEnabled": False}
+             and "[memories]\nuse_memories = false\ngenerate_memories = true\n" in codex_after
+             and 'model = "gpt-5"' in codex_after and "[tui]\nnotifications = true" in codex_after,
+             {"out": [done.stdout + done.stderr for done in on], "claude": claude_settings.read_text(),
+              "codex": codex_after})
+
+        def context(app: str) -> tuple[str, float]:
+            began = time.time()
+            done = home.fire("SessionStart", "m1", "", home.dir, app=app)
+            try:
+                added = json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"]
+            except (ValueError, KeyError):
+                added = f"exit {done.returncode}: {done.stdout}{done.stderr}"
+            return added, time.time() - began
+
+        for app_name, mode in (("claude", "Private:"), ("codex", "Shared:")):
+            added, _ = context(app_name)
+            case(f"a {app_name} session starts with the groups and mode of its own connection",
+                 "okWOW is this app's memory" in added and "Deploys" in added and "(in: space:" in added
+                 and mode in added and len(added) <= 10_000, added)
+        fake.index = None
+        added, took = context("claude")
+        case("okWOW down: a session still starts at once with the last groups",
+             "Deploys" in added and took < 5, {"seconds": took, "added": added})
+        (home.dir / ".local" / "state" / "okwow" / "memory-index-claude.json").unlink()
+        added, took = context("claude")
+        case("okWOW down with no groups saved: the session starts and says okWOW is unreachable",
+             "could not be reached" in added and "okWOW is this app's memory" in added and took < 9,
+             {"seconds": took, "added": added})
+        off = [home.capture("memory", "off", "--agent", agent) for agent in ("claude", "codex")]
+        after = home.fire("SessionStart", "m2", "", home.dir)
+        case("memory off puts each app's own memory settings back exactly and stops adding groups",
+             all(done.returncode == 0 for done in off) and claude_settings.read_text() == claude_before
+             and codex_config.read_text() == codex_before and after.stdout == "",
+             {"out": [done.stdout + done.stderr for done in off], "claude": claude_settings.read_text(),
+              "codex": codex_config.read_text(), "start": after.stdout})
     finally:
         home.stop()
         fake.httpd.shutdown()
