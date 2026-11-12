@@ -17,8 +17,8 @@ to offer each fact first, offer it instead.
 
 Every result says the connection's `mode`; a new connection starts private.
 In private mode a save is the user's alone; in shared mode it reaches the
-place's members. Private mode refuses saves to `org:` and `create_task`;
-shared mode refuses `me`.
+place's members. Private mode refuses saves to `org:`; shared mode refuses
+`me`. A task is the space's in either mode.
 
 Save in the mode you are in. When a private save holds something teammates
 need, say so and suggest shared mode; call `switch_mode` only when the user
@@ -107,7 +107,7 @@ offer to delete the private copy so search does not return both.
 
 ## Tasks
 
-`create_task` needs shared mode, a space (`in`) and a title. `owner` is
+`create_task` needs a space (`in`) and a title, in either mode. `owner` is
 optional and never a bare name; give work to someone else only when the user
 asks. `tracked: false` keeps a task off the team's board as your own
 checklist.

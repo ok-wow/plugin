@@ -55,9 +55,9 @@ https://okwow.ai/docs/how-okwow-works/):
   `list_spaces` before you save there.
 - **Mode:** this connection is in private or shared mode, and every result
   says which. Private: saves are the user's alone, and saves in the
-  organization and new tasks are refused. Shared: saves reach the place's
-  members. The mode stays until it is switched; switch only when the user
-  says so.
+  organization are refused. A task is the space's in either mode. Shared:
+  saves reach the place's members. The mode stays until it is switched;
+  switch only when the user says so.
 - **Refusals:** a refused call stored nothing, and its message says what to
   do next. Follow it.
 - **Plugins:** tools named `<app>_<tool>` come from the user's okWOW plugins
@@ -101,7 +101,7 @@ https://okwow.ai/docs/how-okwow-works/):
    pointer file fetches the okWOW copy each time it runs. To change the skill,
    `fetch` it and `update_content` it with that `version`; never edit the
    pointer.
-5. **Track work as okWOW tasks** (creating one needs shared mode). Give each
+5. **Track work as okWOW tasks** (in either mode). Give each
    workstream a task, claim it with your session, keep its todos current, ask
    the user before you block it on a person, and complete it with a report.
    The okWOW save skill's tasks reference has the details.
