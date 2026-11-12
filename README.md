@@ -231,7 +231,13 @@ plugins/okwow/
   skills/save/SKILL.md            plus references/ loaded on demand
   skills/setup/SKILL.md           plus references/ loaded on demand
   skills/capture/SKILL.md
+directory/okwow/                  the same plugin without session capture: recall, save
+                                  and setup with the hosted MCP server, and no local code
 ```
+
+`directory/okwow` is generated: edit the skills under `plugins/okwow`, then run
+`python3 scripts/build_directory_plugin.py`. `python3 tests/check_release.py`
+fails while the two differ.
 
 Check capture with `python3 tests/check_redaction.py` (planted secrets) and
 `python3 tests/check_capture.py` (end to end against a fake okWOW). Check changes with `claude plugin validate --strict .` and
