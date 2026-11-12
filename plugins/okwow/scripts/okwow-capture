@@ -1192,7 +1192,8 @@ MEMORY_BLOCK_CHARS = 9_000
 FIRST_INDEX_TIMEOUT = 2.5
 # Worded as in setup's okWOW instruction block, which holds the full rules.
 MODES = {
-    "private": "Private: saves are the user's alone, and saves in the organization and new tasks are refused.",
+    "private": "Private: saves are the user's alone, and saves in the organization are refused. "
+               "A task is the space's in either mode.",
     "shared": "Shared: saves reach the place's members.",
 }
 ROUTING = ("okWOW is this app's memory, and its own memory is off. Save team knowledge to okWOW, not local "
