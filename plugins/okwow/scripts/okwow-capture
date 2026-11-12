@@ -22,9 +22,11 @@ import argparse
 import base64
 import contextlib
 import fcntl
+import functools
 import hashlib
 import http.server
 import json
+import math
 import os
 import re
 import secrets
@@ -39,6 +41,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -625,21 +628,58 @@ class MCP:
 
 # --- redaction ---------------------------------------------------------------
 
+def entropy(text: str) -> float:
+    """Shannon entropy in bits per character: random tokens score high, words and code low."""
+    return -sum(n / len(text) * math.log2(n / len(text)) for n in Counter(text).values()) if text else 0.0
+
+
+@dataclass(frozen=True)
+class Allow:
+    """A gitleaks allowlist: a match it covers is not a secret (a placeholder, an example, a template)."""
+
+    target: str  # what the regexes test: the "secret", the whole "match", or its "line"
+    regexes: tuple[re.Pattern[str], ...] = ()
+    stopwords: tuple[str, ...] = ()
+
+    def allows(self, match: re.Match[str], secret: str) -> bool:
+        if any(word in secret.lower() for word in self.stopwords):
+            return True
+        if self.target == "line":
+            text = match.string
+            end = text.find("\n", match.end())
+            tested = text[text.rfind("\n", 0, match.start()) + 1:end if end >= 0 else len(text)]
+        else:
+            tested = match.group(0) if self.target == "match" else secret
+        return any(regex.search(tested) for regex in self.regexes)
+
+
 @dataclass(frozen=True)
 class Rule:
-    """One shape of secret. The `secret` group, or the whole match when there is none, becomes the mark; the
-    rest of the match stays, so a reader still sees what the secret was for. A rule with keywords runs only on
-    text that holds one of them, lower-cased, as gitleaks does."""
+    """One shape of secret, as gitleaks keeps them. The secret is the `secret` group, else the rule's `group`,
+    else the first group that matched, else the whole match; only it becomes the mark, so a reader still sees
+    what it was for. A rule with keywords runs only on text that holds one of them, lower-cased. A secret at or
+    under the rule's entropy, or one an allowlist covers, is left as it is."""
 
     label: str
     pattern: re.Pattern[str]
     keywords: tuple[str, ...] = ()
+    group: int = 0
+    floor: float = 0.0
+    allow: tuple[Allow, ...] = ()
+
+    def span(self, match: re.Match[str]) -> tuple[int, int]:
+        if "secret" in self.pattern.groupindex:
+            return match.span("secret")
+        if self.group:
+            return match.span(self.group)
+        return next((match.span(i) for i in range(1, self.pattern.groups + 1) if match.group(i)), match.span())
 
     def cut(self, match: re.Match[str]) -> str:
         whole = match.group(0)
-        if "secret" not in self.pattern.groupindex:
-            return self.mark
-        start, end = match.span("secret")
+        start, end = self.span(match)
+        secret = match.string[start:end]
+        if (self.floor and entropy(secret) <= self.floor) or any(a.allows(match, secret) for a in self.allow):
+            return whole
         return whole[: start - match.start()] + self.mark + whole[end - match.start():]
 
     @property
@@ -752,10 +792,34 @@ SENSITIVE_COMMAND = re.compile(
 )
 
 
+# gitleaks' own rules, as data: scripts/import_gitleaks_rules.py writes the file from a gitleaks release.
+GITLEAKS_RULES = Path(__file__).with_name("gitleaks-rules.json")
+
+
+def allowlist(entry: Mapping[str, Any]) -> Allow:
+    return Allow(entry["target"], tuple(re.compile(r, re.ASCII) for r in entry["regexes"]), tuple(entry["stopwords"]))
+
+
+@functools.cache
+def rules() -> tuple[Rule, ...]:
+    """Ours, then gitleaks'. Without gitleaks' file nothing is redacted, so nothing is sent."""
+    try:
+        data = json.loads(GITLEAKS_RULES.read_text())
+        common = (allowlist(data["allow"]),) if data.get("allow") else ()
+        imported = tuple(
+            Rule(entry["id"], re.compile(entry["regex"], re.ASCII), tuple(entry["keywords"]), entry.get("group", 0),
+                 entry.get("entropy", 0.0), tuple(map(allowlist, entry.get("allow", []))) + common)
+            for entry in data["rules"]
+        )
+    except (OSError, ValueError, KeyError, re.error) as error:
+        raise CaptureError(f"{GITLEAKS_RULES.name} could not be read ({error}); reinstall the plugin") from error
+    return RULES + imported
+
+
 def redact(text: str) -> str:
     text = redact_json(text)
     lower = text.lower()
-    for found in RULES:
+    for found in rules():
         if not found.keywords or any(k in lower for k in found.keywords):
             text = found.pattern.sub(found.cut, text)
     return text
