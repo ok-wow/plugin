@@ -626,6 +626,7 @@ class MCP:
 # --- redaction ---------------------------------------------------------------
 
 _SECRET_NAME = r"[A-Za-z0-9_.-]*(?:secret|token|passw(?:or)?d|passwd|api[_-]?key|private[_-]?key|access[_-]?key|credential|auth[_-]?key|client[_-]?secret|dsn|webhook)[A-Za-z0-9_.-]*"
+_JSON_VALUE = re.compile(r'("value"\s*:\s*")((?:[^"\\]|\\.){6,})(")')
 REDACTIONS: list[tuple[re.Pattern[str], Any]] = [
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S), "[REDACTED PRIVATE KEY]"),
     (re.compile(r"\bAGE-SECRET-KEY-1[0-9A-Z]{58}\b"), "[REDACTED PRIVATE KEY]"),
@@ -633,7 +634,8 @@ REDACTIONS: list[tuple[re.Pattern[str], Any]] = [
     (re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}"), "[REDACTED ANTHROPIC KEY]"),
     (re.compile(r"\bsk-(?:proj-|svcacct-|or-)?[A-Za-z0-9_-]{20,}"), "[REDACTED API KEY]"),
     (re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b"), "[REDACTED GITHUB TOKEN]"),
-    (re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"), "[REDACTED SLACK TOKEN]"),
+    # Every Slack token type, xoxc- and the URL-encoded xoxd- session cookie of a signed-in browser included.
+    (re.compile(r"\bxox[a-z]-[A-Za-z0-9%._-]{10,}"), "[REDACTED SLACK TOKEN]"),
     (re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}"), "[REDACTED GITLAB TOKEN]"),
     (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b|\bya29\.[0-9A-Za-z_-]{20,}|\bGOCSPX-[A-Za-z0-9_-]{20,}"), "[REDACTED GOOGLE KEY]"),
     (re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b|\bwhsec_[A-Za-z0-9]{16,}\b"), "[REDACTED STRIPE KEY]"),
@@ -650,6 +652,12 @@ REDACTIONS: list[tuple[re.Pattern[str], Any]] = [
     (re.compile(r"([a-z][a-z0-9+.-]*://)[^\s:/@]+:[^\s@/]+@"), r"\1[REDACTED]@"),
     # Connection strings (Azure, ADO.NET, ODBC) and request headers.
     (re.compile(r"(?i)\b(AccountKey|SharedAccessKey|SharedAccessSignature|Pwd|Password)=([^;\s\"']+)"), r"\1=[REDACTED]"),
+    # A browser cookie saved as JSON (Playwright's storageState, a DevTools or extension export): its value,
+    # whatever the cookie is called.
+    (re.compile(r'\{[^{}]*"(?:domain|httpOnly|hostOnly|sameSite)"\s*:[^{}]*\}'),
+     lambda m: _JSON_VALUE.sub(r"\1[REDACTED]\3", m.group(0))),
+    # A cookies.txt line: domain, flag, path, secure, expiry, name, then the value.
+    (re.compile(r"([\w.-]+\t(?:TRUE|FALSE)\t[^\t\n]*\t(?:TRUE|FALSE)\t-?\d+\t[^\t\n]*\t)[^\t\r\n]+"), r"\1[REDACTED]"),
     (re.compile(r"(?im)\b(authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)(\s*:\s*)([^\r\n\"']{6,})"),
      lambda m: f"{m.group(1)}{m.group(2)}[REDACTED]"),
     # Command-line flags: --api-key VALUE, --password=VALUE.
@@ -665,7 +673,8 @@ SENSITIVE_PATH = re.compile(
     r"(?:^|[\s/'\"=~])(?:\.env(?:\.[\w.-]+)?|\.envrc|\.netrc|\.npmrc|\.pypirc|\.pgpass|\.git-credentials|\.?credentials(?:\.json)?"
     r"|id_[rd]sa|id_ecdsa|id_ed25519|[\w.-]+\.pem|[\w.-]+\.p12|[\w.-]+\.pfx|[\w.-]+\.key|[\w.-]+\.keychain(?:-db)?"
     r"|secrets?\.(?:json|ya?ml|toml)|[\w.-]*\.tfstate(?:\.backup)?|[\w.-]*\.tfvars|service[-_]account[\w.-]*\.json"
-    r"|capture-token(?:-\w+)?\.json|\.ssh/[\w.-]+|\.aws/[\w.-]+|\.kube/config|\.docker/config\.json|gh/hosts\.yml)(?:$|[\s'\"])"
+    r"|capture-token(?:-\w+)?\.json|cookies\.(?:txt|json|sqlite)|storage[-_]?state[\w.-]*\.json"
+    r"|\.ssh/[\w.-]+|\.aws/[\w.-]+|\.kube/config|\.docker/config\.json|gh/hosts\.yml)(?:$|[\s'\"])"
 )
 # A command that prints credentials has its output left out entirely.
 SENSITIVE_COMMAND = re.compile(
