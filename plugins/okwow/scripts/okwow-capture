@@ -687,11 +687,16 @@ class Rule:
         return f"[REDACTED {self.label}]" if self.label else "[REDACTED]"
 
 
-def rule(label: str, regex: str, *keywords: str) -> Rule:
-    return Rule(label, re.compile(regex), keywords)
+def rule(label: str, regex: str, *keywords: str, floor: float = 0.0) -> Rule:
+    return Rule(label, re.compile(regex), keywords, floor=floor)
 
 
-_SECRET_NAME = r"[A-Za-z0-9_.-]*(?:secret|token|passw(?:or)?d|passwd|api[_-]?key|private[_-]?key|access[_-]?key|credential|auth[_-]?key|client[_-]?secret|dsn|webhook)[A-Za-z0-9_.-]*"
+_PASSWORD_NAME = r"[A-Za-z0-9_.-]*(?:passw(?:or)?d|passwd)[A-Za-z0-9_.-]*"
+_SECRET_NAME = r"[A-Za-z0-9_.-]*(?:secret|token|api[_-]?key|private[_-]?key|access[_-]?key|credential|auth[_-]?key|client[_-]?secret|dsn|webhook)[A-Za-z0-9_.-]*"
+# Bits per character a value named like a token must pass to be cut: below it are code (`credentials: 'include'`,
+# `fooToken.ts:115`) and placeholders, which made 6 of 10 cuts in 150 real sessions. Passwords have no floor: people
+# choose them, so they score low (`hunter2hunter2` is 2.8).
+NAMED_SECRET_FLOOR = 3.0
 RULES: tuple[Rule, ...] = (
     rule("PRIVATE KEY", r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", "private key-----"),
     rule("PRIVATE KEY", r"\bAGE-SECRET-KEY-1[0-9A-Z]{58}\b", "age-secret-key-1"),
@@ -730,14 +735,16 @@ RULES: tuple[Rule, ...] = (
     # Command-line flags: --api-key VALUE, --password=VALUE.
     rule("", r"(?i)--(?:[a-z0-9]+-)*(?:password|passwd|token|secret|api-?key|access-?key|auth)[=\s]+['\"]?"
              r"(?P<secret>[^\s'\"]{4,})", "--"),
+    rule("", rf"(?im)\b{_PASSWORD_NAME}(?:\s*[=:]\s*|\"\s*:\s*\")['\"]?(?P<secret>[^\s'\",;]{{6,}})", "pass"),
     rule("", rf"(?im)\b{_SECRET_NAME}(?:\s*[=:]\s*|\"\s*:\s*\")['\"]?(?P<secret>[^\s'\",;]{{6,}})",
-         "secret", "token", "pass", "key", "credential", "dsn", "webhook"),
+         "secret", "token", "key", "credential", "dsn", "webhook", floor=NAMED_SECRET_FLOOR),
 )
 
 # Structured output is scrubbed by key, as Sentry's EventScrubber does: the value under a key that names a secret,
 # and the value of an object shaped like a browser cookie (Playwright's storageState, a DevTools or extension
-# export), whatever the cookie is called.
-SECRET_KEY = re.compile(rf"(?i){_SECRET_NAME}|cookie|session|authorization")
+# export), whatever the cookie is called. A key named like a token takes the same entropy floor as in text.
+ALWAYS_SECRET_KEY = re.compile(rf"(?i){_PASSWORD_NAME}|cookie|session|authorization")
+SECRET_KEY = re.compile(rf"(?i){_SECRET_NAME}")
 COOKIE_KEYS = {"domain", "httpOnly", "hostOnly", "sameSite"}
 # What the Read tool puts before each line of a file: its number and a tab (an arrow in older versions).
 LINE_NUMBER = re.compile(r"^ *\d+(?:\t|→)", re.M)
@@ -751,7 +758,11 @@ def secret_values(value: Any) -> Iterator[str]:
     elif isinstance(value, dict):
         cookie = not COOKIE_KEYS.isdisjoint(value)
         for key, item in value.items():
-            if isinstance(item, str) and len(item) >= 6 and (SECRET_KEY.fullmatch(key) or (cookie and key == "value")):
+            if isinstance(item, str) and len(item) >= 6 and (
+                ALWAYS_SECRET_KEY.fullmatch(key)
+                or (cookie and key == "value")
+                or (SECRET_KEY.fullmatch(key) and entropy(item) > NAMED_SECRET_FLOOR)
+            ):
                 yield item
             else:
                 yield from secret_values(item)
