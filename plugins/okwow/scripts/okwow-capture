@@ -625,49 +625,113 @@ class MCP:
 
 # --- redaction ---------------------------------------------------------------
 
+@dataclass(frozen=True)
+class Rule:
+    """One shape of secret. The `secret` group, or the whole match when there is none, becomes the mark; the
+    rest of the match stays, so a reader still sees what the secret was for. A rule with keywords runs only on
+    text that holds one of them, lower-cased, as gitleaks does."""
+
+    label: str
+    pattern: re.Pattern[str]
+    keywords: tuple[str, ...] = ()
+
+    def cut(self, match: re.Match[str]) -> str:
+        whole = match.group(0)
+        if "secret" not in self.pattern.groupindex:
+            return self.mark
+        start, end = match.span("secret")
+        return whole[: start - match.start()] + self.mark + whole[end - match.start():]
+
+    @property
+    def mark(self) -> str:
+        return f"[REDACTED {self.label}]" if self.label else "[REDACTED]"
+
+
+def rule(label: str, regex: str, *keywords: str) -> Rule:
+    return Rule(label, re.compile(regex), keywords)
+
+
 _SECRET_NAME = r"[A-Za-z0-9_.-]*(?:secret|token|passw(?:or)?d|passwd|api[_-]?key|private[_-]?key|access[_-]?key|credential|auth[_-]?key|client[_-]?secret|dsn|webhook)[A-Za-z0-9_.-]*"
-_JSON_VALUE = re.compile(r'("value"\s*:\s*")((?:[^"\\]|\\.){6,})(")')
-REDACTIONS: list[tuple[re.Pattern[str], Any]] = [
-    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S), "[REDACTED PRIVATE KEY]"),
-    (re.compile(r"\bAGE-SECRET-KEY-1[0-9A-Z]{58}\b"), "[REDACTED PRIVATE KEY]"),
-    (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "[REDACTED AWS KEY]"),
-    (re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}"), "[REDACTED ANTHROPIC KEY]"),
-    (re.compile(r"\bsk-(?:proj-|svcacct-|or-)?[A-Za-z0-9_-]{20,}"), "[REDACTED API KEY]"),
-    (re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b"), "[REDACTED GITHUB TOKEN]"),
+RULES: tuple[Rule, ...] = (
+    rule("PRIVATE KEY", r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", "private key-----"),
+    rule("PRIVATE KEY", r"\bAGE-SECRET-KEY-1[0-9A-Z]{58}\b", "age-secret-key-1"),
+    rule("AWS KEY", r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b", "akia", "asia"),
+    rule("ANTHROPIC KEY", r"\bsk-ant-[A-Za-z0-9_-]{20,}", "sk-ant-"),
+    rule("API KEY", r"\bsk-(?:proj-|svcacct-|or-)?[A-Za-z0-9_-]{20,}", "sk-"),
+    rule("GITHUB TOKEN", r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b",
+         "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"),
     # Every Slack token type, xoxc- and the URL-encoded xoxd- session cookie of a signed-in browser included.
-    (re.compile(r"\bxox[a-z]-[A-Za-z0-9%._-]{10,}"), "[REDACTED SLACK TOKEN]"),
-    (re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}"), "[REDACTED GITLAB TOKEN]"),
-    (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b|\bya29\.[0-9A-Za-z_-]{20,}|\bGOCSPX-[A-Za-z0-9_-]{20,}"), "[REDACTED GOOGLE KEY]"),
-    (re.compile(r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b|\bwhsec_[A-Za-z0-9]{16,}\b"), "[REDACTED STRIPE KEY]"),
-    (re.compile(r"\bnpm_[A-Za-z0-9]{36}\b"), "[REDACTED NPM TOKEN]"),
-    (re.compile(r"\bhf_[A-Za-z0-9]{30,}\b"), "[REDACTED HUGGING FACE TOKEN]"),
-    (re.compile(r"\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}"), "[REDACTED SENDGRID KEY]"),
-    (re.compile(r"\bSK[0-9a-fA-F]{32}\b"), "[REDACTED TWILIO KEY]"),
-    (re.compile(r"\bdo[opr]_v1_[a-f0-9]{64}\b"), "[REDACTED DIGITALOCEAN TOKEN]"),
-    (re.compile(r"\blin_(?:api|oauth)_[A-Za-z0-9]{32,}\b"), "[REDACTED LINEAR KEY]"),
-    (re.compile(r"\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}\b"), "[REDACTED SHOPIFY TOKEN]"),
-    (re.compile(r"\bdapi[a-f0-9]{32}\b"), "[REDACTED DATABRICKS TOKEN]"),
-    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), "[REDACTED JWT]"),
-    (re.compile(r"(?i)\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=-]{16,}"), lambda m: f"{m.group(1)} [REDACTED]"),
-    (re.compile(r"([a-z][a-z0-9+.-]*://)[^\s:/@]+:[^\s@/]+@"), r"\1[REDACTED]@"),
-    # Connection strings (Azure, ADO.NET, ODBC) and request headers.
-    (re.compile(r"(?i)\b(AccountKey|SharedAccessKey|SharedAccessSignature|Pwd|Password)=([^;\s\"']+)"), r"\1=[REDACTED]"),
-    # A browser cookie saved as JSON (Playwright's storageState, a DevTools or extension export): its value,
-    # whatever the cookie is called.
-    (re.compile(r'\{[^{}]*"(?:domain|httpOnly|hostOnly|sameSite)"\s*:[^{}]*\}'),
-     lambda m: _JSON_VALUE.sub(r"\1[REDACTED]\3", m.group(0))),
+    rule("SLACK TOKEN", r"\bxox[a-z]-[A-Za-z0-9%._-]{10,}", "xox"),
+    rule("GITLAB TOKEN", r"\bglpat-[A-Za-z0-9_-]{20,}", "glpat-"),
+    rule("GOOGLE KEY", r"\bAIza[0-9A-Za-z_-]{35}\b|\bya29\.[0-9A-Za-z_-]{20,}|\bGOCSPX-[A-Za-z0-9_-]{20,}",
+         "aiza", "ya29.", "gocspx-"),
+    rule("STRIPE KEY", r"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}\b|\bwhsec_[A-Za-z0-9]{16,}\b",
+         "_live_", "_test_", "whsec_"),
+    rule("NPM TOKEN", r"\bnpm_[A-Za-z0-9]{36}\b", "npm_"),
+    rule("HUGGING FACE TOKEN", r"\bhf_[A-Za-z0-9]{30,}\b", "hf_"),
+    rule("SENDGRID KEY", r"\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}", "sg."),
+    rule("TWILIO KEY", r"\bSK[0-9a-fA-F]{32}\b", "sk"),
+    rule("DIGITALOCEAN TOKEN", r"\bdo[opr]_v1_[a-f0-9]{64}\b", "_v1_"),
+    rule("LINEAR KEY", r"\blin_(?:api|oauth)_[A-Za-z0-9]{32,}\b", "lin_"),
+    rule("SHOPIFY TOKEN", r"\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}\b", "shp"),
+    rule("DATABRICKS TOKEN", r"\bdapi[a-f0-9]{32}\b", "dapi"),
+    rule("JWT", r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", "eyj"),
+    # The rules below keep what names the secret and cut only its value.
+    rule("", r"(?i)\b(?:bearer|basic|token)\s+(?P<secret>[A-Za-z0-9._~+/=-]{16,})", "bearer", "basic", "token"),
+    rule("", r"[a-z][a-z0-9+.-]*://(?P<secret>[^\s:/@]+:[^\s@/]+)@", "://"),
+    # Connection strings (Azure, ADO.NET, ODBC).
+    rule("", r"(?i)\b(?:AccountKey|SharedAccessKey|SharedAccessSignature|Pwd|Password)=(?P<secret>[^;\s\"']+)",
+         "accountkey", "sharedaccess", "pwd=", "password="),
     # A cookies.txt line: domain, flag, path, secure, expiry, name, then the value.
-    (re.compile(r"([\w.-]+\t(?:TRUE|FALSE)\t[^\t\n]*\t(?:TRUE|FALSE)\t-?\d+\t[^\t\n]*\t)[^\t\r\n]+"), r"\1[REDACTED]"),
-    (re.compile(r"(?im)\b(authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)(\s*:\s*)([^\r\n\"']{6,})"),
-     lambda m: f"{m.group(1)}{m.group(2)}[REDACTED]"),
+    rule("", r"[\w.-]+\t(?:TRUE|FALSE)\t[^\t\n]*\t(?:TRUE|FALSE)\t-?\d+\t[^\t\n]*\t(?P<secret>[^\t\r\n]+)",
+         "\ttrue\t", "\tfalse\t"),
+    rule("", r"(?im)\b(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)\s*:\s*"
+             r"(?P<secret>[^\r\n\"']{6,})", "authorization", "cookie", "x-api-key", "x-auth-token"),
     # Command-line flags: --api-key VALUE, --password=VALUE.
-    (re.compile(r"(?i)(--(?:[a-z0-9]+-)*(?:password|passwd|token|secret|api-?key|access-?key|auth)(?:[=\s]+))(['\"]?)([^\s'\"]{4,})"),
-     lambda m: f"{m.group(1)}{m.group(2)}[REDACTED]"),
-    (
-        re.compile(rf"(?im)\b({_SECRET_NAME})(\s*[=:]\s*|\"\s*:\s*\")(['\"]?)([^\s'\",;]{{6,}})"),
-        lambda m: f"{m.group(1)}{m.group(2)}{m.group(3)}[REDACTED]",
-    ),
-]
+    rule("", r"(?i)--(?:[a-z0-9]+-)*(?:password|passwd|token|secret|api-?key|access-?key|auth)[=\s]+['\"]?"
+             r"(?P<secret>[^\s'\"]{4,})", "--"),
+    rule("", rf"(?im)\b{_SECRET_NAME}(?:\s*[=:]\s*|\"\s*:\s*\")['\"]?(?P<secret>[^\s'\",;]{{6,}})",
+         "secret", "token", "pass", "key", "credential", "dsn", "webhook"),
+)
+
+# Structured output is scrubbed by key, as Sentry's EventScrubber does: the value under a key that names a secret,
+# and the value of an object shaped like a browser cookie (Playwright's storageState, a DevTools or extension
+# export), whatever the cookie is called.
+SECRET_KEY = re.compile(rf"(?i){_SECRET_NAME}|cookie|session|authorization")
+COOKIE_KEYS = {"domain", "httpOnly", "hostOnly", "sameSite"}
+# What the Read tool puts before each line of a file: its number and a tab (an arrow in older versions).
+LINE_NUMBER = re.compile(r"^ *\d+(?:\t|→)", re.M)
+
+
+def secret_values(value: Any) -> Iterator[str]:
+    """The string values a JSON document keeps under a secret's key, at any depth."""
+    if isinstance(value, list):
+        for item in value:
+            yield from secret_values(item)
+    elif isinstance(value, dict):
+        cookie = not COOKIE_KEYS.isdisjoint(value)
+        for key, item in value.items():
+            if isinstance(item, str) and len(item) >= 6 and (SECRET_KEY.fullmatch(key) or (cookie and key == "value")):
+                yield item
+            else:
+                yield from secret_values(item)
+
+
+def redact_json(text: str) -> str:
+    """Cut the secrets of a JSON document wherever they occur in the text, which is left as written."""
+    body = LINE_NUMBER.sub("", text).strip()
+    if body[:1] not in ("{", "["):
+        return text
+    try:
+        document = json.loads(body)
+    except ValueError:
+        return text
+    for secret in set(secret_values(document)):
+        for written in {secret, json.dumps(secret, ensure_ascii=False)[1:-1]}:
+            text = text.replace(written, "[REDACTED]")
+    return text
+
+
 # A tool call that reads one of these files has its output left out entirely.
 SENSITIVE_PATH = re.compile(
     r"(?:^|[\s/'\"=~])(?:\.env(?:\.[\w.-]+)?|\.envrc|\.netrc|\.npmrc|\.pypirc|\.pgpass|\.git-credentials|\.?credentials(?:\.json)?"
@@ -689,8 +753,11 @@ SENSITIVE_COMMAND = re.compile(
 
 
 def redact(text: str) -> str:
-    for pattern, replacement in REDACTIONS:
-        text = pattern.sub(replacement, text)
+    text = redact_json(text)
+    lower = text.lower()
+    for found in RULES:
+        if not found.keywords or any(k in lower for k in found.keywords):
+            text = found.pattern.sub(found.cut, text)
     return text
 
 
