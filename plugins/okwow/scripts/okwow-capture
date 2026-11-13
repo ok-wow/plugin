@@ -23,6 +23,7 @@ import base64
 import contextlib
 import fcntl
 import hashlib
+import hmac
 import http.server
 import json
 import os
@@ -392,38 +393,34 @@ def page(heading: str, body: str, ok: bool) -> str:
     return PAGE.format(heading=heading, body=body, tone="#3ea44b" if ok else "#d91a45", icon=CONNECTOR_ICON)
 
 
-def login(url: str, agent: str) -> dict[str, Any]:
-    """Sign the app in through the browser, for its okWOW tools and capture; returns the capture settings."""
-    url = checked_server(url)
-    found = discover(url)
-    metadata = found["metadata"]
-    saved = read_json(token_file(agent), {}, private=True)
-    if saved.get("server") == url and saved.get("client_id") and saved.get("port"):
-        client_id, port = saved["client_id"], saved["port"]
-    else:
-        port = free_port()
-        status, _, body = fetch(
-            "POST",
-            metadata["registration_endpoint"],
-            json.dumps(
-                {
-                    "client_name": AGENTS[agent],
-                    "redirect_uris": [f"http://127.0.0.1:{port}/callback"],
-                    "grant_types": ["authorization_code", "refresh_token"],
-                    "response_types": ["code"],
-                    "token_endpoint_auth_method": "none",
-                }
-            ).encode(),
-            {"Content-Type": "application/json", "Accept": "application/json"},
-        )
-        if status not in (200, 201):
-            raise CaptureError(f"Client registration failed ({status})")
-        client_id = json.loads(body)["client_id"]
-    redirect_uri = f"http://127.0.0.1:{port}/callback"
+def register_client(metadata: dict[str, Any], agent: str, redirect_uri: str) -> str:
+    status, _, body = fetch(
+        "POST",
+        metadata["registration_endpoint"],
+        json.dumps(
+            {
+                "client_name": AGENTS[agent],
+                "redirect_uris": [redirect_uri],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+            }
+        ).encode(),
+        {"Content-Type": "application/json", "Accept": "application/json"},
+    )
+    if status not in (200, 201):
+        raise CaptureError(f"Client registration failed ({status})")
+    return json.loads(body)["client_id"]
+
+
+def pkce() -> tuple[str, str]:
+    """A PKCE verifier and its S256 challenge."""
     verifier = secrets.token_urlsafe(64)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-    state = secrets.token_urlsafe(24)
-    authorize = checked_endpoint(metadata["authorization_endpoint"]) + "?" + urllib.parse.urlencode(
+    return verifier, base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+
+
+def authorize_url(found: dict[str, Any], client_id: str, redirect_uri: str, challenge: str, state: str) -> str:
+    return checked_endpoint(found["metadata"]["authorization_endpoint"]) + "?" + urllib.parse.urlencode(
         {
             "response_type": "code",
             "client_id": client_id,
@@ -435,36 +432,63 @@ def login(url: str, agent: str) -> dict[str, Any]:
             "resource": found["resource"],
         }
     )
+
+
+def complete_login(
+    agent: str, url: str, found: dict[str, Any], client_id: str, redirect_uri: str, verifier: str, code: str,
+    port: Optional[int] = None,
+) -> dict[str, Any]:
+    """Exchange the authorization code, store the tokens and read the profile and capture settings."""
+    metadata = found["metadata"]
+    tokens = post_form(
+        metadata["token_endpoint"],
+        {
+            "grant_type": "authorization_code",
+            "code": code,
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "code_verifier": verifier,
+            "resource": found["resource"],
+        },
+    )
+    connection_: dict[str, Any] = {
+        "server": url,
+        "resource": found["resource"],
+        "token_endpoint": metadata["token_endpoint"],
+        "client_id": client_id,
+    }
+    if port:
+        connection_["port"] = port
+    store_tokens(agent, connection_, tokens)
+    mcp = MCP(url, agent)
+    profile = mcp.call("get_profile", {})
+    user = profile.get("user") or profile
+    meta = read_json(token_file(agent), {}, private=True)
+    meta["profile"] = {"name": user.get("name") or user.get("display_name"), "email": user.get("email")}
+    write_json(token_file(agent), meta, private=True)
+    return {"email": meta["profile"]["email"], "settings": mcp.call("get_session_capture", {}),
+            "legacy": forget_legacy()}
+
+
+def login(url: str, agent: str) -> dict[str, Any]:
+    """Sign the app in through the browser, for its okWOW tools and capture; returns the capture settings."""
+    url = checked_server(url)
+    found = discover(url)
+    metadata = found["metadata"]
+    saved = read_json(token_file(agent), {}, private=True)
+    if saved.get("server") == url and saved.get("client_id") and saved.get("port"):
+        client_id, port = saved["client_id"], saved["port"]
+    else:
+        port = free_port()
+        client_id = register_client(metadata, agent, f"http://127.0.0.1:{port}/callback")
+    redirect_uri = f"http://127.0.0.1:{port}/callback"
+    verifier, challenge = pkce()
+    state = secrets.token_urlsafe(24)
+    authorize = authorize_url(found, client_id, redirect_uri, challenge, state)
     outcome: dict[str, Any] = {}
 
     def finish(code: str) -> dict[str, Any]:
-        tokens = post_form(
-            metadata["token_endpoint"],
-            {
-                "grant_type": "authorization_code",
-                "code": code,
-                "client_id": client_id,
-                "redirect_uri": redirect_uri,
-                "code_verifier": verifier,
-                "resource": found["resource"],
-            },
-        )
-        connection_ = {
-            "server": url,
-            "resource": found["resource"],
-            "token_endpoint": metadata["token_endpoint"],
-            "client_id": client_id,
-            "port": port,
-        }
-        store_tokens(agent, connection_, tokens)
-        mcp = MCP(url, agent)
-        profile = mcp.call("get_profile", {})
-        user = profile.get("user") or profile
-        meta = read_json(token_file(agent), {}, private=True)
-        meta["profile"] = {"name": user.get("name") or user.get("display_name"), "email": user.get("email")}
-        write_json(token_file(agent), meta, private=True)
-        return {"email": meta["profile"]["email"], "settings": mcp.call("get_session_capture", {}),
-                "legacy": forget_legacy()}
+        return complete_login(agent, url, found, client_id, redirect_uri, verifier, code, port)
 
     class Callback(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -1431,12 +1455,95 @@ def hook() -> None:
         spawn("sweep")
 
 
+# --- headless sign-in --------------------------------------------------------
+
+PENDING_MINUTES = 10
+
+
+def pending_file(agent: str) -> Path:
+    """A headless sign-in between its start and its finish."""
+    return CONFIG_DIR / f"capture-pending-{agent}.json"
+
+
+def headless_redirect(url: str, override: Optional[str]) -> str:
+    """Where okWOW's page shows the code: the MCP host's `api` label swapped for `app`."""
+    if override:
+        if urllib.parse.urlsplit(override).scheme != "https":
+            raise CaptureError("--redirect-uri must be an https:// URL")
+        return override
+    labels = (urllib.parse.urlsplit(url).hostname or "").lower().split(".")
+    if labels[-3:] == ["api", "okwow", "ai"]:
+        labels[-3] = "app"
+        return f"https://{'.'.join(labels)}/mcp-login/code"
+    raise CaptureError(f"Cannot derive where {urllib.parse.urlsplit(url).hostname} shows the sign-in code; "
+                       "pass --redirect-uri https://...")
+
+
+def headless_start(url: str, agent: str, override: Optional[str]) -> str:
+    """Register a client for a redirect okWOW's page serves, remember the sign-in, and return its authorize URL."""
+    url = checked_server(url)
+    redirect_uri = headless_redirect(url, override)
+    found = discover(url)
+    client_id = register_client(found["metadata"], agent, redirect_uri)
+    verifier, challenge = pkce()
+    state = secrets.token_urlsafe(24)
+    write_json(pending_file(agent), {
+        "server": url, "client_id": client_id, "redirect_uri": redirect_uri, "verifier": verifier,
+        "state": state, "created_at": time.time(),
+    }, private=True)
+    return authorize_url(found, client_id, redirect_uri, challenge, state)
+
+
+def headless_finish(agent: str, pasted: str) -> dict[str, Any]:
+    """Finish a headless sign-in with the `code#state` okWOW's page showed (or the bare code)."""
+    path = pending_file(agent)
+    try:
+        pending = read_json(path, {}, private=True)
+        if not pending:
+            raise CaptureError(f"No sign-in is waiting for {AGENTS[agent]}; run `login --agent {agent} --headless` first")
+        if time.time() - float(pending.get("created_at") or 0) > PENDING_MINUTES * 60:
+            raise CaptureError(f"The sign-in expired (started more than {PENDING_MINUTES} minutes ago); "
+                               "start again with --headless")
+        code, sep, state = pasted.strip().partition("#")
+        if sep and not hmac.compare_digest(state.encode(), str(pending.get("state", "")).encode()):
+            raise CaptureError("The state does not match the sign-in that was started; start again with --headless")
+        if not code:
+            raise CaptureError("No code given; pass the code#state okWOW showed")
+        url = checked_server(pending["server"])
+        found = discover(url)
+        try:
+            return complete_login(agent, url, found, pending["client_id"], pending["redirect_uri"],
+                                  pending["verifier"], code)
+        except CaptureError as error:
+            if str(error).startswith("Sign-in refused"):
+                raise CaptureError(f"{error}. The code was already used or has expired; start again with --headless") from None
+            raise
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            path.unlink()
+
+
 def command_login(args: argparse.Namespace) -> None:
+    if args.headless and args.finish:
+        raise CaptureError("--headless and --finish are separate steps; run one at a time")
+    if args.redirect_uri and not args.headless:
+        raise CaptureError("--redirect-uri goes with --headless")
     cfg = config()
-    cfg["server"] = checked_server(args.server or cfg.get("server") or plugin_server())
+    if args.finish:
+        # The server is the one the sign-in started with.
+        pending = read_json(pending_file(args.agent), {}, private=True)
+        cfg["server"] = checked_server(pending.get("server") or cfg.get("server") or plugin_server())
+    else:
+        cfg["server"] = checked_server(args.server or cfg.get("server") or plugin_server())
+    if args.headless:
+        print("Open this URL in a browser, sign in to okWOW, then run\n"
+              f"  okwow-capture login --agent {args.agent} --finish '<code#state>'\n"
+              f"with the code okWOW shows (within {PENDING_MINUTES} minutes):\n"
+              f"{headless_start(cfg['server'], args.agent, args.redirect_uri)}")
+        return
     write_json(CONFIG_FILE, cfg)
     ask_once(args.agent)
-    outcome = login(cfg["server"], args.agent)
+    outcome = headless_finish(args.agent, args.finish) if args.finish else login(cfg["server"], args.agent)
     print(f"Signed {AGENTS[args.agent]} in to okWOW as {outcome.get('email') or 'you'}. Its okWOW tools use this "
           "sign-in too: new sessions pick it up; in a session that is already open, reconnect the okwow MCP server.")
     print(describe(outcome["settings"]))
@@ -1649,6 +1756,11 @@ def main() -> None:
     p = sub.add_parser("login", help="sign an app in to okWOW, for its okWOW tools and session capture")
     p.add_argument("--agent", required=True, choices=agents, help="the app to sign in")
     p.add_argument("--server", help=f"okWOW MCP URL (default: OKWOW_MCP_URL, else {PRODUCTION_SERVER})")
+    p.add_argument("--headless", action="store_true",
+                   help="start a sign-in for a machine with no browser: print the URL to open elsewhere")
+    p.add_argument("--finish", metavar="CODE#STATE", help="finish a --headless sign-in with the code okWOW showed")
+    p.add_argument("--redirect-uri", help="with --headless, the https:// page that shows the code, "
+                   "when the server's host does not map to an okWOW app host")
     p.add_argument("--quiet", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(run=command_login)
     p = sub.add_parser("logout", help="sign an app out of okWOW on this machine")
