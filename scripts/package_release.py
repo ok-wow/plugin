@@ -32,7 +32,7 @@ def main():
     shared = {'LICENSE': (ROOT / 'LICENSE').read_bytes(),
               'README.md': (ROOT / 'submission/knowledge-README.md').read_bytes()}
     # Explicit inventory: local capture scripts/hooks and test fixtures are not web components.
-    for skill in ('recall', 'save'):
+    for skill in ('recall', 'save', 'publish'):
         shared[f'skills/{skill}/SKILL.md'] = (PLUGIN / f'skills/{skill}/SKILL.md').read_bytes()
     shared['skills/save/references/tasks.md'] = (PLUGIN / 'skills/save/references/tasks.md').read_bytes()
     openai = {key: source[key] for key in ('name', 'version', 'author', 'license')}

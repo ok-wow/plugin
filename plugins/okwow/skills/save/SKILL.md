@@ -63,6 +63,10 @@ can see a place before you put those there.
   create the image first and use the receipt's `download_url` as the `<img src>`.
 - **Task** (`create_task`): a to-do, not a fact. See Tasks.
 
+A finished document that belongs in the organization's own repository (a
+shared drive, a document library) is not saved here; the `publish` skill puts
+it there.
+
 ## 3. File memories in groups
 
 A memory without `group` lands in the place's Inbox. `list_memories` for the

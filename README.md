@@ -2,13 +2,15 @@
 
 Search and save your okWOW knowledge from your coding agent. One plugin serves
 every supported app (see [Install the plugin](#install-the-plugin)). It
-connects your agent to the okWOW MCP server and adds four skills:
+connects your agent to the okWOW MCP server and adds five skills:
 
 - **recall**: searches okWOW before answering questions about past decisions,
   conventions and project facts, then fetches and cites what it used.
 - **save**: saves a verified fact as a memory or a write-up as a document, in a
   destination you choose, and shows the agent how to claim, work and complete
   okWOW tasks.
+- **publish**: decides when finished work moves into your organization's
+  document repository, names drafts and finals, and keeps a pointer in okWOW.
 - **setup**: a guided setup in chat (`/okwow:setup`): reads your okWOW account
   and your agent's setup first, then sets up people, spaces, skills,
   transcripts and session capture, can move your agent's local memory
@@ -79,7 +81,7 @@ gemini extensions install https://github.com/ok-wow/plugin
 
 Gemini CLI installs the latest release. Then run `/mcp auth okwow` in Gemini
 CLI: your browser opens okWOW to sign in and approve access. The Gemini extension
-includes the recall and save skills; it does not include setup or session
+includes the recall, save and publish skills; it does not include setup or session
 capture.
 
 ### Pin a version
@@ -229,6 +231,7 @@ plugins/okwow/
   scripts/okwow-capture           sign-in, MCP relay and session capture (Python 3, no dependencies)
   skills/recall/SKILL.md
   skills/save/SKILL.md            plus references/ loaded on demand
+  skills/publish/SKILL.md
   skills/setup/SKILL.md           plus references/ loaded on demand
   skills/capture/SKILL.md
 ```
