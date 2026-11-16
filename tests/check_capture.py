@@ -85,6 +85,11 @@ class Fake:
         self.clients: dict[str, str] = {}
         # Live access tokens, by the client they were issued to.
         self.tokens: dict[str, str] = {}
+        # The one refresh token each client may still use: okWOW replaces it at every renewal.
+        self.refresh: dict[str, str] = {}
+        self.renewing = threading.Lock()
+        # How long a renewal takes, so that processes renewing together overlap.
+        self.renewal_seconds = 0.0
         # Every token grant: its type and the name of the client it was for.
         self.grants: list[tuple[str, str]] = []
         self.issued = 0
@@ -174,14 +179,19 @@ class Fake:
                 if path == "/token":
                     fields = dict(urllib.parse.parse_qsl(raw.decode()))
                     client_id = fields.get("client_id", "")
+                    renewal = fields.get("grant_type") == "refresh_token"
                     fake.grants.append((fields.get("grant_type", ""), fake.clients.get(client_id, "")))
-                    if fields.get("grant_type") == "refresh_token" and not fake.refresh_ok:
-                        return self.reply(400, {"error": "invalid_grant"})
-                    fake.issued += 1
-                    token = f"access-{client_id}-{fake.issued}"
-                    fake.tokens[token] = client_id
-                    return self.reply(200, {"access_token": token, "refresh_token": f"refresh-{client_id}",
-                                            "expires_in": 3600})
+                    with fake.renewing:
+                        spent = fields.get("refresh_token") != fake.refresh.get(client_id)
+                        if renewal and (spent or not fake.refresh_ok):
+                            return self.reply(400, {"error": "invalid_grant"})
+                        fake.issued += 1
+                        token = f"access-{client_id}-{fake.issued}"
+                        fake.tokens[token] = client_id
+                        refresh = fake.refresh[client_id] = f"refresh-{client_id}-{fake.issued}"
+                    if renewal:
+                        time.sleep(fake.renewal_seconds)
+                    return self.reply(200, {"access_token": token, "refresh_token": refresh, "expires_in": 3600})
                 if path != "/mcp":
                     return self.reply(404, {})
                 token = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
@@ -277,6 +287,10 @@ class Relay:
     def request(self, message_id: int, method: str, params: dict[str, Any] | None = None) -> Any:
         """Send a request and return the next line the server writes, parsed."""
         self.send({"jsonrpc": "2.0", "id": message_id, "method": method, **({"params": params} if params else {})})
+        return self.reply()
+
+    def reply(self) -> Any:
+        """The next line the server writes, parsed."""
         try:
             line = self.lines.get(timeout=30)
         except queue.Empty:
@@ -745,6 +759,24 @@ def main() -> int:
              and all(c != "Claude Code" for _, c in fake.grants),
              {"reply": refused, "grants": fake.grants, "claude": round_trip_error(fake, still, "Claude Code")})
         home.capture("login", "--agent", "codex")
+
+        # Each open session runs a relay of its own, with watchers and sweeps beside them, and
+        # they find the sign-in expired at the same moment. okWOW takes a refresh token once,
+        # so the app's processes take turns: one renews, the rest use what it saved.
+        saved = json.loads(home.token().read_text())
+        home.token().write_text(json.dumps({**saved, "expires_at": 0}))
+        fake.grants.clear()
+        fake.renewal_seconds = 1
+        relays = [home.relay("claude") for _ in range(4)]
+        for relay in relays:
+            relay.send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": INITIALIZE})
+        together = [relay.reply() or {} for relay in relays]
+        for relay in relays:
+            relay.close()
+        fake.renewal_seconds = 0
+        case("an app's processes that find its sign-in expired together renew it once, and all go through",
+             fake.grants == [("refresh_token", "Claude Code")] and all("result" in reply for reply in together),
+             {"grants": fake.grants, "replies": together})
 
         # Gemini CLI runs only the relay: its first use opens its own sign-in.
         relay = home.relay("gemini")
