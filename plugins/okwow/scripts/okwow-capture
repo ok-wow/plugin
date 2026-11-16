@@ -236,6 +236,11 @@ def token_file(agent: str) -> Path:
     return CONFIG_DIR / f"capture-token-{agent}.json"
 
 
+def token_lock(agent: str) -> Path:
+    """Held by the one process that renews the app's sign-in."""
+    return STATE_DIR / f"capture-token-{agent}.lock"
+
+
 def asked_file(agent: str) -> Path:
     """Sign-in opens on its own once per app; this records that it did."""
     return CONFIG_DIR / f"capture-asked-{agent}"
@@ -301,29 +306,49 @@ def sign_in_step(agent: str) -> str:
     return f"sign in with `okwow-capture login --agent {agent}`"
 
 
-def access_token(agent: str, url: str, force_refresh: bool = False) -> str:
+def signed_in(agent: str, url: str) -> dict[str, Any]:
+    """The app's saved connection to this server."""
     saved = connection(agent)
     if not saved.get("access_token"):
         raise CaptureError(f"{AGENTS[agent]} is not signed in to okWOW; {sign_in_step(agent)}")
     if saved.get("server") != url:
         raise CaptureError(f"{AGENTS[agent]}'s okWOW sign-in is for another server; {sign_in_step(agent)}")
-    if force_refresh or time.time() >= saved.get("expires_at", 0):
-        if not saved.get("refresh_token"):
-            raise CaptureError(f"{AGENTS[agent]}'s okWOW sign-in expired; {sign_in_step(agent)}")
-        try:
-            tokens = post_form(
-                saved["token_endpoint"],
-                {
-                    "grant_type": "refresh_token",
-                    "refresh_token": saved["refresh_token"],
-                    "client_id": saved["client_id"],
-                    "resource": saved["resource"],
-                },
-            )
-        except CaptureError as error:
-            raise CaptureError(f"{AGENTS[agent]}'s okWOW sign-in could not be renewed ({error}); "
-                               f"{sign_in_step(agent)}") from error
-        store_tokens(agent, saved, tokens)
+    return saved
+
+
+def renew(agent: str, saved: dict[str, Any]) -> None:
+    if not saved.get("refresh_token"):
+        raise CaptureError(f"{AGENTS[agent]}'s okWOW sign-in expired; {sign_in_step(agent)}")
+    try:
+        tokens = post_form(
+            saved["token_endpoint"],
+            {
+                "grant_type": "refresh_token",
+                "refresh_token": saved["refresh_token"],
+                "client_id": saved["client_id"],
+                "resource": saved["resource"],
+            },
+        )
+    except CaptureError as error:
+        raise CaptureError(f"{AGENTS[agent]}'s okWOW sign-in could not be renewed ({error}); "
+                           f"{sign_in_step(agent)}") from error
+    store_tokens(agent, saved, tokens)
+
+
+def access_token(agent: str, url: str, refused: str = "") -> str:
+    """The app's access token, renewed once it has run out or okWOW has refused it (`refused`)."""
+
+    def spent(saved: dict[str, Any]) -> bool:
+        return saved["access_token"] == refused or time.time() >= saved.get("expires_at", 0)
+
+    saved = signed_in(agent, url)
+    if spent(saved):
+        # okWOW takes a refresh token once, and every session, watcher and sweep of the app is a
+        # process of its own: one of them renews, the others use what it saved.
+        with locked(path=token_lock(agent)):
+            saved = signed_in(agent, url)
+            if spent(saved):
+                renew(agent, saved)
     return saved["access_token"]
 
 
@@ -547,8 +572,6 @@ class MCP:
         self.session: Optional[str] = None
         self.protocol = PROTOCOL_VERSION
         self.next_id = 0
-        # The relay posts from several threads; one of them renews the sign-in at a time.
-        self.lock = threading.Lock()
         if connect:
             self._send("initialize", {
                 "protocolVersion": PROTOCOL_VERSION,
@@ -559,8 +582,7 @@ class MCP:
 
     def post(self, message: Any, retry: bool = True) -> list[dict[str, Any]]:
         """Send one JSON-RPC message; the messages okWOW answers with, from JSON or an event stream."""
-        with self.lock:
-            token = access_token(self.agent, self.server)
+        token = access_token(self.agent, self.server)
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
@@ -573,10 +595,7 @@ class MCP:
             "POST", self.server, json.dumps(message).encode(), headers, timeout=self.timeout
         )
         if status == 401 and retry:
-            with self.lock:
-                # Another request may have renewed it already.
-                if access_token(self.agent, self.server) == token:
-                    access_token(self.agent, self.server, force_refresh=True)
+            access_token(self.agent, self.server, refused=token)
             return self.post(message, retry=False)
         if status >= 400:
             raise CaptureError(f"okWOW MCP returned {status}: {body[:300]!r}")
