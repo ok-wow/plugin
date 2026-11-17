@@ -81,12 +81,15 @@ one yes for the whole table.
 
 1. Create any approved new spaces first (`create_space` with the title,
    audience and members agreed).
-2. For each transcript: `prepare_upload` with `in` set to its space, a plain
-   filename and its exact byte size; `PUT` the file's bytes with the returned
-   headers; then `create_content` with the `upload` id, `kind: transcript`, a
-   title such as `2026-11-03 Acme renewal call`, and `participants` with each
-   person's name, their email when known, and their `speaker_label` when you
-   know which speaker they are.
+2. For each transcript, write its people to a JSON file (each person's name,
+   their email when known, and their `speaker_label` when you know which
+   speaker they are) and run the plugin's `scripts/okwow-capture`
+   (`../../../scripts/okwow-capture` from this file):
+   `okwow-capture save <file> --in space:<uuid> --agent <this app> --kind
+   transcript --title "2026-11-03 Acme renewal call" --participants
+   <people.json>`. It uploads the file and prints the receipt, so no upload URL
+   passes through you. Without a shell, use `prepare_upload`, its `curl`, then
+   `create_content` with the `upload` id and the same details.
 3. `duplicate: true` means okWOW already had it: count it as skipped, not as
    an error. On a failure, keep going and report it at the end.
 
