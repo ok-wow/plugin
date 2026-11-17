@@ -233,16 +233,20 @@ class Fake:
                     return ok({"action": action, "in": fake.space if action == "send" else None,
                                "reason": None if action == "send" else fake.reason,
                                "settings_url": fake.settings_url})
-                if name in ("prepare_upload", "create_content") and "in" in arguments:
+                capturing = "session" in arguments or "start" in arguments
+                if name in ("prepare_upload", "create_content") and "in" in arguments and capturing:
                     # Capture leaves the space to okWOW's settings; a stale local choice must not win.
                     return refuse("capture sent its own space")
                 if name in ("prepare_upload", "create_content") and fake.decide(start) != "send":
                     return refuse("Not saved: your session capture settings skip sessions started here.")
-                if name == "create_content" and set(arguments["session"]) - {"id", "label", "agent", "start"}:
+                if name == "create_content" and set(arguments.get("session") or {}) - {"id", "label", "agent", "start"}:
                     return refuse(f"unexpected session fields: {sorted(arguments['session'])}")
                 if name == "prepare_upload":
                     return ok({"upload_id": "upload:1", "upload_url": fake.upload_url(fake.base),
                                "headers": {"Content-Type": "text/plain"}})
+                if name == "create_content" and "session" not in arguments:
+                    return ok({"id": "vault:33333333-3333-3333-3333-333333333333", "kind": "transcript",
+                               "in": SPACE, "duplicate": False, "version": "1"})
                 if name == "create_content":
                     return ok({"id": "chat:22222222-2222-2222-2222-222222222222", "duplicate": False})
                 return {"isError": True, "content": [{"type": "text", "text": f"Unknown tool: {name}"}]}
@@ -1003,6 +1007,34 @@ def main() -> int:
              and codex_config.read_text() == codex_before and after.stdout == "",
              {"out": [done.stdout + done.stderr for done in off], "claude": claude_settings.read_text(),
               "codex": codex_config.read_text(), "start": after.stdout})
+
+        # An agent saves a file by its path: the command does the upload, so no URL passes through the agent.
+        transcript = home.dir / "2026-11-03 Acme renewal.vtt"
+        transcript.write_bytes("WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nPriya: Renew for two years.\n".encode())
+        people = home.dir / "people.json"
+        people.write_text(json.dumps([{"name": "Priya Shah", "email": "priya@acme.example", "speaker_label": "Priya"}]))
+        fake.reset()
+        fake.upload_url = lambda base: f"{base}/upload/1?X-Amz-Signature=" + "a" * 1500
+        saved = home.capture("save", str(transcript), "--in", SPACE["id"], "--agent", "claude", "--kind", "transcript",
+                             "--title", "Acme / okWOW renewal", "--participants", str(people))
+        prepare, create = call(fake, "prepare_upload"), call(fake, "create_content")
+        case("save puts the file's exact bytes once and creates it in the named space with its details",
+             saved.returncode == 0 and fake.puts == [transcript.read_bytes()]
+             and prepare == {"in": SPACE["id"], "filename": transcript.name, "size_bytes": transcript.stat().st_size}
+             and create == {"in": SPACE["id"], "upload": "upload:1", "kind": "transcript",
+                            "title": "Acme / okWOW renewal", "participants": json.loads(people.read_text())},
+             {"out": saved.stdout + saved.stderr, "calls": fake.calls, "puts": len(fake.puts)})
+        receipt = json.loads(saved.stdout) if saved.returncode == 0 else {}
+        case("save prints the receipt and never the upload URL",
+             receipt.get("id", "").startswith("vault:") and "X-Amz-Signature" not in saved.stdout + saved.stderr,
+             saved.stdout + saved.stderr)
+        fake.reset()
+        refused = [home.capture("save", str(home.dir / "missing.vtt"), "--in", SPACE["id"], "--agent", "claude"),
+                   home.capture("save", str(transcript), "--in", "My Workspace", "--agent", "claude")]
+        case("save refuses a missing file or a place that is not a space id, and sends nothing",
+             all(done.returncode != 0 for done in refused) and not fake.calls and not fake.puts,
+             [done.stderr for done in refused])
+        fake.upload_url = lambda base: f"{base}/upload/1"
     finally:
         home.stop()
         fake.httpd.shutdown()

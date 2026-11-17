@@ -1593,6 +1593,42 @@ def command_upload(args: argparse.Namespace) -> None:
         print(f"Nothing sent; see {LOG_FILE}")
 
 
+SPACE_ID = re.compile(r"space:[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
+
+
+def command_save(args: argparse.Namespace) -> None:
+    """Save one local file to a space: prepare, PUT and create in one step, so an
+    agent passes a path instead of retyping a presigned upload URL."""
+    if not SPACE_ID.fullmatch(args.place):
+        raise CaptureError(f"--in must be a space:UUID from list_spaces, not {args.place!r}")
+    path = Path(args.path).expanduser()
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise CaptureError(f"cannot read {path}: {error.strerror or error}") from None
+    participants = None
+    if args.participants:
+        try:
+            participants = json.loads(Path(args.participants).expanduser().read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise CaptureError(f"--participants must be a JSON file with a list of people: {error}") from None
+    mcp = MCP(server(), args.agent)
+    prepare: dict[str, Any] = {"in": args.place, "filename": path.name, "size_bytes": len(data)}
+    if args.content_type:
+        prepare["content_type"] = args.content_type
+    prepared = mcp.call("prepare_upload", prepare)
+    status, _, _ = fetch("PUT", prepared["upload_url"], data, prepared.get("headers") or {}, timeout=300)
+    if status not in (200, 201, 204):
+        raise CaptureError(f"the upload was refused ({status}); nothing was saved")
+    arguments: dict[str, Any] = {"in": args.place, "upload": prepared.get("id") or prepared.get("upload_id")}
+    for key in ("kind", "title", "description"):
+        if getattr(args, key):
+            arguments[key] = getattr(args, key)
+    if participants is not None:
+        arguments["participants"] = participants
+    print(json.dumps(mcp.call("create_content", arguments)))
+
+
 def command_memory(args: argparse.Namespace) -> None:
     """Make okWOW one app's memory on this machine, or put the app's own back."""
     agent, name = args.agent, AGENTS[args.agent]
@@ -1669,6 +1705,16 @@ def main() -> None:
     p.add_argument("--harness", choices=sorted(APPS), help="the app that wrote the file (default: detected from its folder)")
     p.add_argument("--dry-run", action="store_true", help="print the redacted session instead of sending it")
     p.set_defaults(run=command_upload)
+    p = sub.add_parser("save", help="save one local file to a space and print okWOW's receipt")
+    p.add_argument("path")
+    p.add_argument("--in", dest="place", required=True, help="the space:UUID to save it in, from list_spaces")
+    p.add_argument("--agent", required=True, choices=agents, help="the app whose okWOW sign-in to use")
+    p.add_argument("--kind", choices=["auto", "artifact", "file", "skill", "transcript"])
+    p.add_argument("--title", help="its title; defaults to the file name")
+    p.add_argument("--description")
+    p.add_argument("--participants", help="a JSON file listing a transcript's people: name, email, speaker_label")
+    p.add_argument("--content-type", help="MIME type; okWOW infers it from the extension when omitted")
+    p.set_defaults(run=command_save)
     p = sub.add_parser("sweep", help="send sessions that went idle")
     p.add_argument("--idle-minutes", type=float)
     p.add_argument("--only")

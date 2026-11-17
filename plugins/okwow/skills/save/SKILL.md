@@ -55,10 +55,15 @@ can see a place before you put those there.
 - **Skill** (`create_content` with a `SKILL.md`): needs the editor role in a
   space. Only the `SKILL.md` text is saved, so inline what teammates need from
   its other files. To change one, update the existing skill.
-- **File or large text**: call `prepare_upload` with the exact byte size
-  (up to 40 MB), `PUT` the bytes to the returned `upload_url` (valid 15
-  minutes), then call `create_content` with `upload` set to the returned
-  `upload:<uuid>` id.
+- **File or large text**: when you can run commands, save it by its path with
+  the plugin's `scripts/okwow-capture` (`../../scripts/okwow-capture` from
+  this file): `okwow-capture save <file> --in space:<uuid> --agent <claude,
+  codex or gemini>`, plus `--kind`, `--title`, `--description` or
+  `--participants <people.json>` as needed. It uploads the bytes and prints the
+  receipt, so you never copy an upload URL. Otherwise call `prepare_upload`
+  with the exact byte size (up to 40 MB), run its `curl` field with the file's
+  path in place of `<path>` (the URL is valid 15 minutes; never retype it),
+  then call `create_content` with `upload` set to the returned `upload:<uuid>` id.
   Images go this way too (`kind: file`). To embed one in an `html` artifact,
   create the image first and use the receipt's `download_url` as the `<img src>`.
 - **Task** (`create_task`): a to-do, not a fact. See Tasks.
