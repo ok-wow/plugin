@@ -58,6 +58,16 @@ owner `list_paths` names, or the user.
 If you find a memory that is stale or wrong, tell the user; fixing it is the
 `save` skill's `update_memory`.
 
+## Published work and drafts
+
+- A result can be a pointer to a document in the organization's repository.
+  `fetch` gives its provider and link under `metadata.external`; read the
+  document itself through a connector. That repository version is the record.
+- A title ending in "(Draft)" is still in review. Cite it as a draft, not as
+  final.
+- Work that exists only in someone's drafting tool, with no copy in the
+  repository, is unverified. Say so before you rely on it.
+
 ## Plugins
 
 The server may also list tools from the user's okWOW plugins (email, chat,
