@@ -144,6 +144,27 @@ Every app runs capture from the plugin's one set of hooks. The hooks name no
 app: capture detects it from the session file's folder and the hook's
 environment.
 
+## Headless and cloud sessions
+
+On a machine with no browser (a cloud or remote session, a container), sign an
+app in with two commands. Use the full path to `okwow-capture` in
+`plugins/okwow/scripts/`, and `claude`, `codex` or `gemini` for `--agent`:
+
+```
+okwow-capture login --agent claude --headless
+okwow-capture login --agent claude --finish '<code#state>'
+```
+
+The first prints a URL and stops. Open it in a browser on any machine, sign in
+to okWOW and approve access; okWOW then shows a code. Paste that code
+(`code#state`) into the second command within 10 minutes. For staging, set
+`OKWOW_MCP_URL=https://staging.api.okwow.ai/mcp` before both commands.
+
+The pasted code is single-use and useless on its own: it only works with the
+verifier that `--headless` kept on this machine, so anyone who sees the code
+cannot sign in with it. If it expires or was already used, start again with
+`--headless`.
+
 ## Choose where sessions go
 
 Ask your coding agent. It confirms each change with you before saving it:
