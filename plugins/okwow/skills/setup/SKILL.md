@@ -171,6 +171,25 @@ adding plugins (okWOW → Plugins), creating an organization, billing and
 seats, and giving an agent access to plugins (okWOW → Settings → Authorized
 apps → Manage access). Never try to do those yourself.
 
+## No browser on this machine
+
+If this is a cloud or remote session where the user cannot open a browser here,
+sign the app in headlessly instead of giving them the plain `login` command:
+
+1. Run `python3 "$CAPTURE" login --agent <this app> --headless` (written out as
+   in the capture skill's Connect section). It prints an authorize URL and
+   stops; for staging, set `OKWOW_MCP_URL=https://staging.api.okwow.ai/mcp`
+   first.
+2. Post that URL to the user and ask them to open it in a browser, sign in and
+   approve access. okWOW then shows a code.
+3. Ask them to paste the code back. It is single-use and useless without the
+   verifier kept on this machine, so it is safe to paste in chat.
+4. Run `python3 "$CAPTURE" login --agent <this app> --finish '<code#state>'`
+   with what they pasted, within 10 minutes of step 1. If it says the code
+   expired or was already used, start again from step 1.
+
+Afterwards they reconnect the okwow MCP server in any open session.
+
 ## Errors
 
 A refusal stored nothing and its message says what to do next: follow it.
