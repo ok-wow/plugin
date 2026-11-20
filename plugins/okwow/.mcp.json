@@ -4,10 +4,14 @@
       "command": "/bin/sh",
       "args": [
         "-c",
-        "if [ -n \"$CLAUDE_PLUGIN_ROOT\" ]; then cd \"$CLAUDE_PLUGIN_ROOT\" && exec python3 -I scripts/okwow-capture mcp --agent claude; else exec python3 -I scripts/okwow-capture mcp --agent codex; fi"
+        "py=; for p in python3 python; do if \"$p\" -c 'import sys; sys.exit(sys.version_info < (3,))' >/dev/null 2>&1; then py=$p; break; fi; done; if [ -z \"$py\" ]; then echo 'okWOW capture: no working Python 3 interpreter found (tried python3, python). Install Python 3 and restart.' >&2; exit 1; fi; if [ -n \"$CLAUDE_PLUGIN_ROOT\" ]; then cd \"$CLAUDE_PLUGIN_ROOT\" && exec \"$py\" -I scripts/okwow-capture mcp --agent claude; else exec \"$py\" -I scripts/okwow-capture mcp --agent codex; fi"
       ],
       "cwd": ".",
-      "env_vars": ["OKWOW_MCP_URL"]
+      "env_vars": [
+        "OKWOW_MCP_URL",
+        "OKWOW_CAPTURE_HOME",
+        "OKWOW_CAPTURE_STATE"
+      ]
     }
   }
 }
