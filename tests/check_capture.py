@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import hashlib
 import http.client
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import queue
@@ -903,10 +905,14 @@ def main() -> int:
         # The configured server swapped for another host.
         fake.reset()
         config = home.config / "capture.json"
-        saved_config = config.read_text()
+        saved_config = config.read_text() if config.exists() else None
         config.write_text(json.dumps({"server": "https://okwow.ai.attacker.example/mcp"}))
-        refused = home.capture("upload", str(home.session("s10", app)))
-        config.write_text(saved_config)
+        # The saved pin applies when OKWOW_MCP_URL is unset.
+        refused = home.capture("upload", str(home.session("s10", app)), env={"OKWOW_MCP_URL": ""})
+        if saved_config is None:
+            config.unlink()
+        else:
+            config.write_text(saved_config)
         case("a server outside okwow.ai is refused", refused.returncode != 0 and not fake.calls,
              refused.stderr.strip())
 
@@ -1091,6 +1097,84 @@ def main() -> int:
         case("finish accepts a bare code", done.returncode == 0 and "pat@example.com" in done.stdout
              and not pending.exists(), done.stdout + done.stderr)
         case("no code or state lands in the log", code not in home.log() and state not in home.log(), None)
+
+        # One server resolution: flag > OKWOW_MCP_URL > saved pin > production; only --server pins.
+        cfg_dir = Path(tempfile.mkdtemp(prefix="okwow-capture-resolve-"))
+        module.CONFIG_FILE = cfg_dir / "capture.json"
+        flag_url, env_url = "https://flag.okwow.ai/mcp", "https://env.okwow.ai/mcp"
+        pin_url, prod = "https://pin.okwow.ai/mcp", module.PRODUCTION_SERVER
+
+        def resolved(explicit: Any, env: Any, pin: Any) -> Any:
+            module.CONFIG_FILE.unlink(missing_ok=True)
+            if pin:
+                module.CONFIG_FILE.write_text(json.dumps({"server": pin}))
+            before = os.environ.pop("OKWOW_MCP_URL", None)
+            if env is not None:
+                os.environ["OKWOW_MCP_URL"] = env
+            try:
+                return module.resolve_server(explicit), module.server()
+            finally:
+                os.environ.pop("OKWOW_MCP_URL", None)
+                if before is not None:
+                    os.environ["OKWOW_MCP_URL"] = before
+
+        for explicit in (None, flag_url):
+            for env in (None, "", env_url):
+                for pin in (None, pin_url):
+                    want = ((flag_url, "flag") if explicit else (env_url, "env") if env
+                            else (pin_url, "config") if pin else (prod, "default"))
+                    got = resolved(explicit, env, pin)
+                    case(f"resolve_server: flag={bool(explicit)} env={env!r} pin={bool(pin)} -> {want[1]}",
+                         got[0] == want and (explicit or got[1] == want[0]), got)
+
+        def login_in_process(*flags: str, env: Any = None, pin: Any = None) -> Any:
+            """command_login with the sign-in itself faked; returns the saved server pin."""
+            module.CONFIG_FILE.unlink(missing_ok=True)
+            if pin:
+                module.CONFIG_FILE.write_text(json.dumps({"server": pin}))
+            os.environ.pop("OKWOW_MCP_URL", None)
+            if env:
+                os.environ["OKWOW_MCP_URL"] = env
+            real_login, real_ask = module.login, module.ask_once
+            module.login = lambda url, agent: {"email": "pat@example.com", "settings": {}, "legacy": False}
+            module.ask_once = lambda agent: None
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    module.command_login(argparse.Namespace(
+                        agent="gemini", headless=False, finish=None, redirect_uri=None,
+                        server=flags[1] if flags else None))
+            finally:
+                module.login, module.ask_once = real_login, real_ask
+                os.environ["OKWOW_MCP_URL"] = home.url
+            return json.loads(module.CONFIG_FILE.read_text()).get("server") if module.CONFIG_FILE.exists() else None
+
+        case("login with no --server and no env pins nothing", login_in_process() is None)
+        case("login with OKWOW_MCP_URL set pins nothing", login_in_process(env=env_url) is None)
+        case("login with OKWOW_MCP_URL leaves an existing pin as it was",
+             login_in_process(env=env_url, pin=pin_url) == pin_url)
+        case("login with no --server keeps an existing pin", login_in_process(pin=pin_url) == pin_url)
+        case("login --server pins it", login_in_process("--server", flag_url) == flag_url)
+        case("login --server replaces an existing pin and beats the env",
+             login_in_process("--server", flag_url, env=env_url, pin=pin_url) == flag_url)
+
+        # Headless: only a start made with --server pins, and only when it finishes.
+        saved_config = (home.config / "capture.json").read_bytes() if (home.config / "capture.json").exists() else None
+
+        def headless_pin(*flags: str) -> Any:
+            (home.config / "capture.json").unlink(missing_ok=True)
+            _, query = start_headless("--redirect-uri", redirect, *flags)
+            started = (home.config / "capture.json").exists()
+            code, state = consent(query)
+            home.capture("login", "--agent", "gemini", "--finish", f"{code}#{state}")
+            found = home.config / "capture.json"
+            return started, json.loads(found.read_text()).get("server") if found.exists() else None
+
+        case("headless start with --server pins nothing until it finishes, then pins",
+             headless_pin("--server", home.url) == (False, home.url))
+        case("headless sign-in without --server never pins, even with OKWOW_MCP_URL set",
+             headless_pin() == (False, None))
+        if saved_config is not None:
+            (home.config / "capture.json").write_bytes(saved_config)
 
         # Codex runs the plugin's own hooks: nothing writes its hooks file.
         gone = home.capture("install-codex")

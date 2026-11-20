@@ -159,13 +159,21 @@ def config() -> dict[str, Any]:
     return read_json(CONFIG_FILE, {})
 
 
-def plugin_server() -> str:
-    """The okWOW server the plugin's MCP relay talks to: OKWOW_MCP_URL, else production."""
-    return os.environ.get("OKWOW_MCP_URL") or PRODUCTION_SERVER
+def resolve_server(explicit: Optional[str] = None) -> tuple[str, str]:
+    """The okWOW server and where it came from: --server, OKWOW_MCP_URL, the pin in capture.json, production.
+
+    The one place the CLI, uploads, the hook and the MCP relay all ask, so they cannot disagree."""
+    if explicit:
+        return explicit, "flag"
+    if os.environ.get("OKWOW_MCP_URL"):
+        return os.environ["OKWOW_MCP_URL"], "env"
+    if config().get("server"):
+        return config()["server"], "config"
+    return PRODUCTION_SERVER, "default"
 
 
 def server() -> str:
-    return checked_server(config().get("server") or plugin_server())
+    return checked_server(resolve_server()[0])
 
 
 # --- http --------------------------------------------------------------------
@@ -1479,7 +1487,7 @@ def headless_redirect(url: str, override: Optional[str]) -> str:
                        "pass --redirect-uri https://...")
 
 
-def headless_start(url: str, agent: str, override: Optional[str]) -> str:
+def headless_start(url: str, agent: str, override: Optional[str], pinned: bool = False) -> str:
     """Register a client for a redirect okWOW's page serves, remember the sign-in, and return its authorize URL."""
     url = checked_server(url)
     redirect_uri = headless_redirect(url, override)
@@ -1489,7 +1497,7 @@ def headless_start(url: str, agent: str, override: Optional[str]) -> str:
     state = secrets.token_urlsafe(24)
     write_json(pending_file(agent), {
         "server": url, "client_id": client_id, "redirect_uri": redirect_uri, "verifier": verifier,
-        "state": state, "created_at": time.time(),
+        "state": state, "created_at": time.time(), "pinned": pinned,
     }, private=True)
     return authorize_url(found, client_id, redirect_uri, challenge, state)
 
@@ -1528,22 +1536,24 @@ def command_login(args: argparse.Namespace) -> None:
         raise CaptureError("--headless and --finish are separate steps; run one at a time")
     if args.redirect_uri and not args.headless:
         raise CaptureError("--redirect-uri goes with --headless")
-    cfg = config()
+    pinned = bool(args.server)  # only an explicit --server pins; the env var and the default never do
     if args.finish:
-        # The server is the one the sign-in started with.
+        # The server is the one the sign-in started with, pinned if that start was given --server.
         pending = read_json(pending_file(args.agent), {}, private=True)
-        cfg["server"] = checked_server(pending.get("server") or cfg.get("server") or plugin_server())
+        url = checked_server(pending.get("server") or resolve_server()[0])
+        pinned = bool(pending.get("pinned"))
     else:
-        cfg["server"] = checked_server(args.server or cfg.get("server") or plugin_server())
+        url = checked_server(resolve_server(args.server)[0])
     if args.headless:
         print("Open this URL in a browser, sign in to okWOW, then run\n"
               f"  okwow-capture login --agent {args.agent} --finish '<code#state>'\n"
               f"with the code okWOW shows (within {PENDING_MINUTES} minutes):\n"
-              f"{headless_start(cfg['server'], args.agent, args.redirect_uri)}")
+              f"{headless_start(url, args.agent, args.redirect_uri, pinned)}")
         return
-    write_json(CONFIG_FILE, cfg)
+    if pinned:
+        write_json(CONFIG_FILE, {**config(), "server": url})
     ask_once(args.agent)
-    outcome = headless_finish(args.agent, args.finish) if args.finish else login(cfg["server"], args.agent)
+    outcome = headless_finish(args.agent, args.finish) if args.finish else login(url, args.agent)
     print(f"Signed {AGENTS[args.agent]} in to okWOW as {outcome.get('email') or 'you'}. Its okWOW tools use this "
           "sign-in too: new sessions pick it up; in a session that is already open, reconnect the okwow MCP server.")
     print(describe(outcome["settings"]))
@@ -1564,7 +1574,7 @@ def command_mcp(args: argparse.Namespace) -> None:
     agent = args.agent
     out = sys.stdout.buffer
     sys.stdout = sys.stderr
-    mcp = MCP(plugin_server(), agent, connect=False)
+    mcp = MCP(server(), agent, connect=False)
     write_lock = threading.Lock()
     opened: list[bool] = []
 
@@ -1755,7 +1765,7 @@ def main() -> None:
     agents = sorted(AGENTS)
     p = sub.add_parser("login", help="sign an app in to okWOW, for its okWOW tools and session capture")
     p.add_argument("--agent", required=True, choices=agents, help="the app to sign in")
-    p.add_argument("--server", help=f"okWOW MCP URL (default: OKWOW_MCP_URL, else {PRODUCTION_SERVER})")
+    p.add_argument("--server", help=f"okWOW MCP URL, saved for next time (default: OKWOW_MCP_URL, else the saved one, else {PRODUCTION_SERVER})")
     p.add_argument("--headless", action="store_true",
                    help="start a sign-in for a machine with no browser: print the URL to open elsewhere")
     p.add_argument("--finish", metavar="CODE#STATE", help="finish a --headless sign-in with the code okWOW showed")
