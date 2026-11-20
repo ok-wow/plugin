@@ -53,8 +53,9 @@ can see a place before you put those there.
   `title` for text; for an artifact set `format` to `markdown` (default),
   `html`, `python` or `tsx`. Optional `description` and `source_urls`.
 - **Skill** (`create_content` with a `SKILL.md`): needs the editor role in a
-  space. Only the `SKILL.md` text is saved, so inline what teammates need from
-  its other files. To change one, update the existing skill.
+  space. Pass its other text files in `files`, keyed by their path inside the
+  skill's folder (`{"references/guide.md": "<text>"}`). To change one, update
+  the existing skill.
 - **File or large text**: call `prepare_upload` with the exact byte size
   (up to 40 MB), `PUT` the bytes to the returned `upload_url` (valid 15
   minutes), then call `create_content` with `upload` set to the returned

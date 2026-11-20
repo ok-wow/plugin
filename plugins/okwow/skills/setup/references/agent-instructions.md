@@ -134,8 +134,8 @@ connected, say so and stop.
 ```
 
 Leave any files next to `SKILL.md` (references, scripts) where they are.
-They stay local and do not reach teammates, who get only the okWOW
-`SKILL.md` text.
+Text files saved with the skill's `files` reach teammates; anything else,
+such as scripts, stays local and does not.
 
 To change the skill, edit the okWOW copy: `fetch` its `vault:` id, then call
 `update_content` with the same id, the returned `version` and the new

@@ -1,7 +1,7 @@
 ---
 name: setup
 description: Use when the user asks to set up okWOW, get started with okWOW, or bring their team, spaces, people, skills, meetings or agent memory into okWOW (for example "set up okWOW", "/okwow:setup", "move my agent's memory into okWOW", "import my meeting transcripts", "invite my team"). Runs a guided setup in chat that reads what is already there first and only asks about gaps.
-argument-hint: "[people | spaces | knowledge | transcripts | memory | defaults | capture | tasks]"
+argument-hint: "[people | spaces | knowledge | transcripts | skills | memory | defaults | capture | tasks]"
 ---
 
 # Set up okWOW
@@ -9,8 +9,8 @@ argument-hint: "[people | spaces | knowledge | transcripts | memory | defaults |
 You run the user's okWOW setup in this chat, through the `okwow` MCP server,
 as the signed-in user. The in-app onboarding already set their profile, their
 agent's name and their plan: do not redo those. If the user named one part
-(people, spaces, knowledge, transcripts, memory, defaults, capture, tasks), run
-that step alone.
+(people, spaces, knowledge, transcripts, skills, memory, defaults, capture,
+tasks), run that step alone.
 
 How places, roles, audiences and connection modes work is explained at
 https://okwow.ai/docs/how-okwow-works/. A refusal stored nothing and its
@@ -98,10 +98,14 @@ follow it: it maps the spaces, finds the transcripts on this machine, places
 each one (or proposes a new space when one is warranted) and uploads them
 after one approval.
 
-For other files the user picks (`SKILL.md` skills, documents), save them to
-the space they chose as the `save` skill describes. To keep a local pointer
-to a skill's okWOW copy, see "A skill pointer" in
-`references/agent-instructions.md`.
+For skills, read `references/skill-placement.md` now and follow it: it
+places each `SKILL.md` the user picked, and on request the skills already in
+okWOW, in the organization, one space or the user's personal place, asks
+only about the unclear and private ones, and saves or moves them after
+approval.
+
+For other files the user picks (documents), save them to the space they
+chose as the `save` skill describes.
 
 ## 6. Move local agent memory into okWOW
 
