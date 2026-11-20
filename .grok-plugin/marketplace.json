@@ -1,0 +1,15 @@
+{
+  "name": "okwow",
+  "description": "okWOW plugins for Grok.",
+  "owner": { "name": "okWOW", "email": "support@okwow.ai" },
+  "plugins": [
+    {
+      "name": "okwow-team",
+      "source": { "type": "local", "path": "./bots/okwow-team" },
+      "description": "Your team bot's okWOW skills: search and save the team's knowledge as its Coworker.",
+      "category": "productivity",
+      "homepage": "https://okwow.ai",
+      "keywords": ["okwow", "memory", "knowledge", "team bot", "coworker"]
+    }
+  ]
+}
