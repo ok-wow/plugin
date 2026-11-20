@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "okwow": {
+      "type": "http",
+      "url": "https://api.okwow.ai/mcp"
+    }
+  }
+}
