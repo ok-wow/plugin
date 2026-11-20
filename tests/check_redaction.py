@@ -3,7 +3,8 @@
 
 Runs `upload --dry-run` on a Claude Code and a Codex session planted with
 API keys, tokens, passwords, credentials in a URL and `.env` output, and fails
-if any planted value appears in what would be sent. Nothing leaves the
+if any planted value appears in what would be sent, or if code that only
+names a secret (kept.json) does not. Nothing leaves the
 machine. Run: python3 tests/check_redaction.py
 """
 
@@ -28,6 +29,8 @@ def fixture(name: str) -> str:
 
 def main() -> int:
     secrets = json.loads(fixture("planted-secrets.json"))
+    # Text that names a secret but holds none, which must reach okWOW as written.
+    kept = json.loads(fixture("kept.json"))
     with tempfile.TemporaryDirectory() as home:
         Path(REPO).mkdir(parents=True, exist_ok=True)
         Path(home, "capture.json").write_text(
@@ -43,6 +46,10 @@ def main() -> int:
                 capture_output=True, text=True, env=env, check=True,
             ).stdout
             leaks = sorted(name for name, value in secrets.items() if value in sent)
+            cut = sorted(name for name, value in kept.items() if value not in sent)
+            if cut:
+                print(f"FAIL {harness}: code that holds no secret was redacted: {', '.join(cut)}")
+                failed = True
             if leaks:
                 print(f"FAIL {harness}: {len(leaks)} planted secrets would be uploaded: {', '.join(leaks)}")
                 failed = True
