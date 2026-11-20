@@ -165,10 +165,12 @@ def resolve_server(explicit: Optional[str] = None) -> tuple[str, str]:
     The one place the CLI, uploads, the hook and the MCP relay all ask, so they cannot disagree."""
     if explicit:
         return explicit, "flag"
-    if os.environ.get("OKWOW_MCP_URL"):
-        return os.environ["OKWOW_MCP_URL"], "env"
-    if config().get("server"):
-        return config()["server"], "config"
+    env = os.environ.get("OKWOW_MCP_URL")
+    if env:
+        return env, "env"
+    pin = config().get("server")
+    if pin:
+        return pin, "config"
     return PRODUCTION_SERVER, "default"
 
 
