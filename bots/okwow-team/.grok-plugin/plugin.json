@@ -1,0 +1,20 @@
+{
+  "name": "okwow-team",
+  "version": "0.1.50",
+  "description": "Your team bot's okWOW skills: search and save the team's knowledge as its Coworker.",
+  "author": {
+    "name": "okWOW",
+    "url": "https://okwow.ai"
+  },
+  "homepage": "https://okwow.ai",
+  "repository": "https://github.com/ok-wow/plugin",
+  "license": "MIT",
+  "keywords": [
+    "okwow",
+    "memory",
+    "knowledge",
+    "team bot",
+    "coworker"
+  ],
+  "logo": "assets/icon.png"
+}
