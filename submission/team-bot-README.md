@@ -14,8 +14,9 @@ can each be a different Coworker:
 
 1. In okWOW, open the Coworker's page under Settings, then its Connections
    tab, and copy its address (`https://api.okwow.ai/mcp/coworkers/<id>`).
-2. In Grok Bot, add a custom MCP server for the team bot with that address,
-   and sign in to okWOW. Under "Works as?", pick the same Coworker.
+2. In Grok Bot, add a custom MCP server for the team bot named `okwow`, the
+   name the skills use, with that address, and sign in to okWOW. Under
+   "Works as?", pick the same Coworker.
 3. Install this plugin on the bot.
 
 The bot then reads and saves as that Coworker, in shared mode: what it saves

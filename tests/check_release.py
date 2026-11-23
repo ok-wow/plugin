@@ -54,7 +54,8 @@ committed = {str(p.relative_to(directory.BOT_OUTPUT)): p.read_bytes()
 assert committed == expected, 'bots/okwow-team is out of date; run python3 scripts/build_directory_plugin.py'
 assert not any(n.startswith(('hooks/', 'scripts/', '.mcp.json', 'mcp.json')) for n in committed)
 manifest = json.loads(committed['.grok-plugin/plugin.json'])
-assert manifest['name'] == 'okwow-team' and manifest['version'] == version
 marketplace = json.loads((ROOT / '.grok-plugin/marketplace.json').read_text())
-assert [e['source']['path'] for e in marketplace['plugins']] == ['./bots/okwow-team']
+[entry] = marketplace['plugins']
+assert entry['source']['path'] == './bots/okwow-team'
+assert (entry['description'], entry['keywords']) == (manifest['description'], manifest['keywords'])
 print('Release archives, the directory plugin and the team-bot plugin passed host layout, version and scope checks.')

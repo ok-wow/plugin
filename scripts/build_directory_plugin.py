@@ -10,7 +10,6 @@
 
 Run after changing a skill it ships: python3 scripts/build_directory_plugin.py
 """
-import argparse
 import json
 from pathlib import Path
 import shutil
@@ -80,12 +79,8 @@ def write(output, contents):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    parser.add_argument('--output', type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument('--bot-output', type=Path, default=BOT_OUTPUT)
-    args = parser.parse_args()
-    write(args.output, files())
-    write(args.bot_output, bot_files())
+    write(DEFAULT_OUTPUT, files())
+    write(BOT_OUTPUT, bot_files())
 
 
 if __name__ == '__main__':
