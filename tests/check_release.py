@@ -47,4 +47,15 @@ assert not any(n.startswith(('hooks/', 'scripts/', 'skills/capture/')) for n in 
 manifest = json.loads(committed['.claude-plugin/plugin.json'])
 assert manifest['name'] == 'okwow' and manifest['version'] == version and 'hooks' not in manifest
 assert json.loads(committed['.mcp.json']) == {'mcpServers': {'okwow': {'type': 'http', 'url': 'https://api.okwow.ai/mcp'}}}
-print('Release archives and the directory plugin passed host layout, version and scope checks.')
+# The committed team-bot plugin is what the build script writes: skills only, no MCP server or local code.
+expected = directory.bot_files()
+committed = {str(p.relative_to(directory.BOT_OUTPUT)): p.read_bytes()
+             for p in directory.BOT_OUTPUT.rglob('*') if p.is_file()}
+assert committed == expected, 'bots/okwow-team is out of date; run python3 scripts/build_directory_plugin.py'
+assert not any(n.startswith(('hooks/', 'scripts/', '.mcp.json', 'mcp.json')) for n in committed)
+manifest = json.loads(committed['.grok-plugin/plugin.json'])
+marketplace = json.loads((ROOT / '.grok-plugin/marketplace.json').read_text())
+[entry] = marketplace['plugins']
+assert entry['source']['path'] == './bots/okwow-team'
+assert (entry['description'], entry['keywords']) == (manifest['description'], manifest['keywords'])
+print('Release archives, the directory plugin and the team-bot plugin passed host layout, version and scope checks.')

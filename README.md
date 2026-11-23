@@ -233,11 +233,14 @@ plugins/okwow/
   skills/capture/SKILL.md
 directory/okwow/                  the same plugin without session capture: recall, save
                                   and setup with the hosted MCP server, and no local code
+bots/okwow-team/                  the Grok Bot plugin for a shared team bot: recall and save,
+                                  with no MCP server; the bot connects to its Coworker's address
+.grok-plugin/marketplace.json     lists bots/okwow-team for Grok
 ```
 
-`directory/okwow` is generated: edit the skills under `plugins/okwow`, then run
+`directory/okwow` and `bots/okwow-team` are generated: edit the skills under `plugins/okwow`, then run
 `python3 scripts/build_directory_plugin.py`. `python3 tests/check_release.py`
-fails while the two differ.
+fails while they differ.
 
 Check capture with `python3 tests/check_redaction.py` (planted secrets) and
 `python3 tests/check_capture.py` (end to end against a fake okWOW). Check changes with `claude plugin validate --strict .` and
